@@ -1,10 +1,10 @@
 import {createBridge} from './bridge.mjs';
-import {createState, applyBootstrap, applyEvent, isActive, primaryAction, filterTools} from './model.mjs';
+import {createState, applyBootstrap, applyPreferences, applyEvent, isActive, primaryAction, filterTools} from './model.mjs';
 
 const bridge = createBridge();
 const state = createState();
-const pages = {home: ['首页', 'home', '工作台'], library: ['工具库', 'grid', '工具库'], updates: ['更新', 'download', '安装与更新'], settings: ['设置', 'settings', '设置'], about: ['关于', 'info', '关于']};
-const art = {dnf_palette_prism: {file: 'prism.webp', scene: 'prism', english: 'Palette Prism'}, rep_player: {file: 'reel.webp', scene: 'film', english: 'Replay Player'}, dnf_skill_prism: {file: 'astral.webp', scene: 'spark', english: 'Skill Prism'}};
+const pages = {home: ['首页', 'home', '首页'], library: ['工具库', 'grid', '工具库'], updates: ['更新', 'download', '安装与更新'], settings: ['设置', 'settings', '设置'], about: ['关于', 'info', '关于']};
+const art = {dnf_palette_prism: {file: 'prism.webp', english: 'Palette Prism'}, rep_player: {file: 'reel.webp', english: 'Replay Player'}, dnf_avatar_studio: {file: 'tailoring-atelier.webp', english: 'Schrödinger’s Atelier'}, dnf_skill_prism: {file: 'skill-dye-workshop.webp', english: 'Skill Dye Workshop'}};
 const paths = {
   home: 'M3 10.5 12 3l9 7.5V21h-6v-7H9v7H3z', grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   download: 'M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4', settings: 'm9 3 1-1h4l1 3 2 1 3-.3 2 3-2 2v2l2 2-2 3-3-.3-2 1-1 3h-4l-1-3-2-1-3 .3-2-3 2-2v-2l-2-2 2-3 3 .3 2-1z M15.3 12a3.3 3.3 0 1 1-6.6 0 3.3 3.3 0 0 1 6.6 0z',
@@ -112,15 +112,14 @@ function renderNotice() {
   $('notice').innerHTML = notices.join('');
 }
 
-function selectedTool() {
-  return findTool(ui.selectedId) || findTool(state.preferences.lastSelectedToolId) || findTool('dnf_palette_prism') || tools().find(tool => tool.installed) || tools()[0];
+function featureTools() {
+  return [...new Set(pins())].map(findTool).filter(Boolean);
 }
 
-function featureTools() {
-  const selected = selectedTool();
-  const ids = Object.keys(art).filter(id => findTool(id));
-  if (selected && !ids.includes(selected.id)) ids.push(selected.id);
-  return ids.map(findTool);
+function selectedTool(fixed = featureTools()) {
+  const selected = fixed.find(tool => tool.id === ui.selectedId) || fixed.find(tool => tool.id === state.preferences.lastSelectedToolId) || fixed[0];
+  ui.selectedId = selected?.id || null;
+  return selected;
 }
 
 function primaryButton(tool, hero = false) {
@@ -131,22 +130,40 @@ function primaryButton(tool, hero = false) {
   return button(label, 'primary', {id: tool.id, disabled: action.disabled || pending, title: action.reason});
 }
 
+function pinButton(tool, {compact = false, menu = false} = {}) {
+  const pinned = pins().includes(tool.id);
+  const label = pinned ? '取消首页固定' : '固定到首页';
+  const pending = ui.pending.has(`pin:${tool.id}`);
+  return `<button type="button" class="${compact ? 'icon-button' : 'button pz-btn'} pin-button ${menu ? 'pz-menuitem' : ''}" data-act="pin" data-id="${esc(tool.id)}" aria-pressed="${pinned}" aria-label="${esc(label)}${esc(tool.name)}" title="${esc(label)}" ${pending ? 'disabled aria-busy="true"' : ''}>${icon('pin', 17)}${compact ? '' : esc(label)}</button>`;
+}
+
+function homePagination(fixed, selectedIndex) {
+  const counter = `<span class="counter"><strong>${String(selectedIndex + 1).padStart(2, '0')}</strong> / ${String(fixed.length).padStart(2, '0')}</span>`;
+  if (fixed.length > 5) {
+    const previous = fixed[(selectedIndex + fixed.length - 1) % fixed.length];
+    const next = fixed[(selectedIndex + 1) % fixed.length];
+    return `<div class="slide-controls compact-pages" role="group" aria-label="切换固定工具"><button class="slide-arrow previous" data-act="focus" data-id="${esc(previous.id)}" aria-label="上一个固定工具：${esc(previous.name)}" title="上一个固定工具">${icon('right', 15)}</button>${counter}<button class="slide-arrow next" data-act="focus" data-id="${esc(next.id)}" aria-label="下一个固定工具：${esc(next.name)}" title="下一个固定工具">${icon('right', 15)}</button></div>`;
+  }
+  return `<div class="slide-controls" role="group" aria-label="切换固定工具">${counter}${fixed.map((item, index) => `<button class="slide ${index === selectedIndex ? 'active' : ''}" data-act="focus" data-id="${esc(item.id)}" aria-pressed="${index === selectedIndex}" aria-label="聚焦${esc(item.name)}" title="${esc(item.name)}"></button>`).join('')}</div>`;
+}
+
 function renderHome() {
-  const tool = selectedTool();
-  if (!tool) return `<section class="home-empty"><h1>工作台</h1><p class="page-sub">本地没有可显示的工具目录。</p>${empty('从工具目录开始', '联网检查目录后，可以安装新工具；已安装工具会从本地安装记录读取。', button(ui.checking ? '检查中…' : '检查工具目录', 'refresh', {className: 'primary', disabled: ui.checking}) + button('下载设置', 'settings-page'))}</section>`;
-  const visual = art[tool.id];
   const focus = featureTools();
+  const tool = selectedTool(focus);
+  if (!tools().length) return `<section class="home-empty"><h1>首页</h1><p class="page-sub">本地没有可显示的工具目录。</p>${empty('从工具目录开始', '联网检查目录后，可以安装新工具；已安装工具会从本地安装记录读取。', button(ui.checking ? '检查中…' : '检查工具目录', 'refresh', {className: 'primary', disabled: ui.checking}) + button('下载设置', 'settings-page'))}</section>`;
+  if (!tool) return `<section class="home-empty"><h1>首页</h1>${empty('还没有固定工具', '在工具库选择常用工具并固定到首页，即可在这里查看和启动。', '<button type="button" class="button primary pz-btn" data-page="library">去工具库固定</button>')}</section>`;
+  const visual = art[tool.id];
   const index = focus.findIndex(item => item.id === tool.id);
-  const fixed = pins().map(findTool).filter(Boolean);
-  const news = updates().sort((a, b) => String(release(b)?.date || '').localeCompare(String(release(a)?.date || ''))).slice(0, 3);
+  const fixed = focus;
+  const news = fixed.filter(item => item.hasUpdate).sort((a, b) => String(release(b)?.date || '').localeCompare(String(release(a)?.date || ''))).slice(0, 3);
   const primary = primaryAction(tool, state.operations);
-  const pinned = fixed.map(item => `<button class="pin-card" data-act="focus" data-id="${esc(item.id)}" title="在工作台查看${esc(item.name)}"><span class="pin-art" data-scene="${art[item.id]?.scene || 'generic'}">${art[item.id] ? '' : `<span aria-hidden="true">${esc(Array.from(item.name)[0])}</span>`}<span class="pin-overlay">${icon('open', 12)}</span></span><span class="pin-info"><strong>${esc(item.name)}</strong><small>${esc(version(item.installedVersion))}</small></span></button>`).join('');
-  return `<section class="hero ${visual ? '' : 'no-art'}" aria-label="聚焦工具">${visual ? `<img class="hero-img" src="assets/${visual.file}" alt="">` : `<div class="hero-category-art" aria-hidden="true"><span class="initial">${esc(Array.from(tool.name)[0])}</span></div>`}<div class="hero-shade"></div><div class="hero-copy"><h1>${esc(tool.name)}</h1>${visual ? `<p class="hero-en" lang="en">${visual.english}</p>` : ''}<div class="hero-meta"><span class="category">${esc(tool.category || '工具')}</span><span class="build-tag">${esc(version(tool.installedVersion || tool.latestVersion))}</span><span class="installed-label">${tool.installed ? '<i class="state-dot"></i>已安装' : '未安装'}</span></div><p class="hero-description">${esc(tool.description || '此工具暂未提供简介。')}</p><button class="hero-link" data-act="detail" data-id="${esc(tool.id)}">${tool.hasUpdate ? `查看新版 ${esc(version(tool.latestVersion))}` : '查看版本详情'}${icon('right', 13)}</button></div>${primary.disabled && primary.reason ? `<p class="hero-disabled">${esc(primary.reason)}</p>` : ''}<div class="hero-foot"><div class="slide-controls" role="group" aria-label="切换聚焦工具"><span class="counter"><strong>${String(index + 1).padStart(2, '0')}</strong> / ${String(focus.length).padStart(2, '0')}</span>${focus.map(item => `<button class="slide ${item.id === tool.id ? 'active' : ''}" data-act="focus" data-id="${esc(item.id)}" aria-pressed="${item.id === tool.id}" aria-label="聚焦${esc(item.name)}" title="${esc(item.name)}"></button>`).join('')}</div><div class="hero-actions">${primaryButton(tool, true)}<button class="hero-more" data-act="more" data-id="${esc(tool.id)}" aria-label="${esc(tool.name)}更多操作" title="更多工具操作">${icon('more', 23)}</button></div></div></section><div class="home-lower"><section><div class="section-heading"><div><h2>固定工具</h2><span class="count">${String(fixed.length).padStart(2, '0')}</span></div><button class="link-button" data-page="library">工具库 ${icon('right', 13)}</button></div>${fixed.length ? `<div class="pin-grid">${pinned}</div>` : '<div class="empty">在工具库固定常用工具，便可从这里快速启动。</div>'}</section><section><div class="section-heading"><div><h2>版本动态</h2></div><button class="link-button" data-page="updates">全部更新信息 ${icon('right', 13)}</button></div>${news.length ? `<div class="news-list">${news.map(item => `<button class="news-row" data-act="detail" data-id="${esc(item.id)}"><i class="news-dot"></i><strong>${esc(item.name)}</strong><time>${esc(release(item)?.date || '')}</time><span class="news-sub">${esc(version(item.installedVersion))} → ${esc(version(item.latestVersion))}</span></button>`).join('')}</div>` : '<div class="empty">当前目录中没有可更新的已安装工具。</div>'}</section></div>`;
+  const pinned = fixed.map(item => `<button class="pin-card" data-act="focus" aria-pressed="${item.id === tool.id}" data-id="${esc(item.id)}" title="在首页查看${esc(item.name)}"><span class="pin-art">${art[item.id] ? `<img class="pin-art-img" src="assets/${art[item.id].file}" alt="">` : `<span aria-hidden="true">${esc(Array.from(item.name)[0])}</span>`}<span class="pin-overlay">${icon('open', 12)}</span></span><span class="pin-info"><strong>${esc(item.name)}</strong><small>${esc(version(item.installedVersion))}</small></span></button>`).join('');
+  return `<section class="hero ${visual ? '' : 'no-art'}" aria-label="聚焦工具">${visual ? `<img class="hero-img" src="assets/${visual.file}" alt="">` : `<div class="hero-category-art" aria-hidden="true"><span class="initial">${esc(Array.from(tool.name)[0])}</span></div>`}<div class="hero-shade"></div><div class="hero-copy"><h1>${esc(tool.name)}</h1>${visual ? `<p class="hero-en" lang="en">${visual.english}</p>` : ''}<div class="hero-meta"><span class="category">${esc(tool.category || '工具')}</span><span class="build-tag">${esc(version(tool.installedVersion || tool.latestVersion))}</span><span class="installed-label">${tool.installed ? '<i class="state-dot"></i>已安装' : '未安装'}</span></div><p class="hero-description">${esc(tool.description || '此工具暂未提供简介。')}</p><button class="hero-link" data-act="detail" data-id="${esc(tool.id)}">${tool.hasUpdate ? `查看新版 ${esc(version(tool.latestVersion))}` : '查看版本详情'}${icon('right', 13)}</button></div>${primary.disabled && primary.reason ? `<p class="hero-disabled">${esc(primary.reason)}</p>` : ''}<div class="hero-foot">${homePagination(focus, index)}<div class="hero-actions">${primaryButton(tool, true)}<button class="hero-more" data-act="more" data-id="${esc(tool.id)}" aria-label="${esc(tool.name)}更多操作" title="更多工具操作">${icon('more', 23)}</button></div></div></section><div class="home-lower"><section><div class="section-heading"><div><h2>固定工具</h2><span class="count">${String(fixed.length).padStart(2, '0')}</span></div><button class="link-button" data-page="library">工具库 ${icon('right', 13)}</button></div><div class="pin-grid">${pinned}</div></section><section><div class="section-heading"><div><h2>版本动态</h2></div><button class="link-button" data-page="updates">全部更新信息 ${icon('right', 13)}</button></div>${news.length ? `<div class="news-list">${news.map(item => `<button class="news-row" data-act="detail" data-id="${esc(item.id)}"><i class="news-dot"></i><strong>${esc(item.name)}</strong><time>${esc(release(item)?.date || '')}</time><span class="news-sub">${esc(version(item.installedVersion))} → ${esc(version(item.latestVersion))}</span></button>`).join('')}</div>` : '<div class="empty">已固定工具暂无可更新版本。</div>'}</section></div>`;
 }
 
 function libraryRows() {
   const rows = filterTools(tools(), ui, pins());
-  const html = rows.map(tool => `<article class="library-row" data-tool-id="${esc(tool.id)}"><button class="row-main" data-act="detail" data-id="${esc(tool.id)}" title="查看工具与版本详情">${tile(tool)}<span><strong>${esc(tool.name)}</strong><small>${esc(tool.category || '工具')} · ${esc(version(tool.installedVersion || tool.latestVersion))}${tool.entryState === 'missing' ? ' · 入口缺失' : tool.entryState === 'recoveryRequired' ? ' · 需要恢复' : ''}</small></span></button><span class="status-text ${tool.hasUpdate ? 'update' : ''}">${esc(tool.hasUpdate ? `可更新至 ${version(tool.latestVersion)}` : tool.disabledReason || (tool.installed ? '已安装' : '未安装'))}</span><button class="icon-button" data-act="pin" data-id="${esc(tool.id)}" aria-pressed="${pins().includes(tool.id)}" aria-label="${pins().includes(tool.id) ? '取消固定' : '固定到首页'}${esc(tool.name)}" title="${pins().includes(tool.id) ? '取消固定' : '固定到首页'}">${icon('pin', 17)}</button>${primaryButton(tool)}<button class="icon-button" data-act="more" data-id="${esc(tool.id)}" aria-label="${esc(tool.name)}更多操作" title="更多操作">${icon('more', 17)}</button></article>`).join('');
+  const html = rows.map(tool => `<article class="library-row" data-tool-id="${esc(tool.id)}"><button class="row-main" data-act="detail" data-id="${esc(tool.id)}" title="查看工具与版本详情">${tile(tool)}<span><strong>${esc(tool.name)}</strong><small>${esc(tool.category || '工具')} · ${esc(version(tool.installedVersion || tool.latestVersion))}${tool.entryState === 'missing' ? ' · 入口缺失' : tool.entryState === 'recoveryRequired' ? ' · 需要恢复' : ''}</small></span></button><span class="status-text ${tool.hasUpdate ? 'update' : ''}">${esc(tool.hasUpdate ? `可更新至 ${version(tool.latestVersion)}` : tool.disabledReason || (tool.installed ? '已安装' : '未安装'))}</span>${pinButton(tool, {compact: true})}${primaryButton(tool)}<button class="icon-button" data-act="more" data-id="${esc(tool.id)}" aria-label="${esc(tool.name)}更多操作" title="更多操作">${icon('more', 17)}</button></article>`).join('');
   return {count: rows.length, html: html || empty('没有找到匹配工具', '试试其他名称或清除当前筛选。', button('清除筛选', 'reset'))};
 }
 
@@ -286,6 +303,7 @@ function restoreFocus(focus) {
 
 function render() {
   const focus = rememberFocus();
+  selectedTool();
   syncChrome();
   const views = {home: renderHome, library: renderLibrary, updates: renderUpdates, settings: renderSettings, about: renderAbout};
   $('surface').innerHTML = ui.loading || !state.sessionId ? connectionState() : views[ui.page]();
@@ -336,7 +354,7 @@ function versionBody(tool, chosen) {
   const kind = !tool.installed ? 'install' : current ? 'reinstall' : chosen === tool.latestVersion && tool.hasUpdate ? 'update' : 'switchVersion';
   const canInstall = Boolean(entry?.canInstall && allows(tool, kind));
   const label = !tool.installed ? '安装此版本' : current ? '重新安装此版本' : kind === 'update' ? '更新至此版本' : '切换至此版本';
-  return `<div class="pz-versionmeta"><span>${esc(entry?.date || '日期未提供')}</span><span>${esc(bytes(entry?.sizeBytes))}</span>${entry?.channel ? `<span>${esc(entry.channel === 'stable' ? '稳定版' : entry.channel === 'beta' ? '测试版' : entry.channel)}</span>` : ''}${tool.needAdmin ? '<span>工具运行可能需要管理员权限</span>' : ''}</div>${notes(entry?.changelog)}${!canInstall ? `<p class="pz-error">${esc(entry?.disabledReason || tool.disabledReason || (entry?.blocked ? '发布方已停用此版本。' : !entry?.compatible ? '当前工具箱不满足此版本要求。' : '此版本当前不可安装。'))}</p>` : ''}<div class="pz-actions">${button(label, 'request-operation', {id: tool.id, selectedVersion: chosen, kind, className: 'primary', disabled: !canInstall || ui.pending.has(`tool:${tool.id}`)})}${tool.installed ? button('启动已安装版本', 'launch', {id: tool.id, disabled: !allows(tool, 'launch') || ui.pending.has(`tool:${tool.id}`)}) : ''}${button('在工作台查看', 'focus', {id: tool.id})}</div>`;
+  return `<div class="pz-versionmeta"><span>${esc(entry?.date || '日期未提供')}</span><span>${esc(bytes(entry?.sizeBytes))}</span>${entry?.channel ? `<span>${esc(entry.channel === 'stable' ? '稳定版' : entry.channel === 'beta' ? '测试版' : entry.channel)}</span>` : ''}${tool.needAdmin ? '<span>工具运行可能需要管理员权限</span>' : ''}</div>${notes(entry?.changelog)}${!canInstall ? `<p class="pz-error">${esc(entry?.disabledReason || tool.disabledReason || (entry?.blocked ? '发布方已停用此版本。' : !entry?.compatible ? '当前工具箱不满足此版本要求。' : '此版本当前不可安装。'))}</p>` : ''}<div class="pz-actions">${button(label, 'request-operation', {id: tool.id, selectedVersion: chosen, kind, className: 'primary', disabled: !canInstall || ui.pending.has(`tool:${tool.id}`)})}${tool.installed ? button('启动已安装版本', 'launch', {id: tool.id, disabled: !allows(tool, 'launch') || ui.pending.has(`tool:${tool.id}`)}) : ''}${pins().includes(tool.id) ? button('在首页查看', 'focus', {id: tool.id}) : ''}</div>`;
 }
 
 function renderModal() {
@@ -348,11 +366,11 @@ function renderModal() {
   if (modal.type === 'detail' && tool) {
     title = tool.name;
     const chosen = modal.selectedVersion || tool.latestVersion || tool.installedVersion;
-    body = `<div class="pz-intro">${tile(tool, 'large')}<div><b>${esc(tool.category)}</b><p>${tool.installed ? `已安装 ${esc(version(tool.installedVersion))}` : '尚未安装'}</p></div></div><p>${esc(tool.description || '此工具暂未提供简介。')}</p>${tool.disabledReason ? `<p class="pz-error">${esc(tool.disabledReason)}</p>` : ''}${tool.availableVersions?.length ? `<label class="pz-field">版本详情<select id="tool-versions" data-id="${esc(tool.id)}">${tool.availableVersions.map(entry => `<option value="${esc(entry.version)}" ${entry.version === chosen ? 'selected' : ''}>${esc(version(entry.version))}${entry.version === tool.latestVersion ? ' · 最新版' : ''}${entry.version === tool.installedVersion ? ' · 已安装' : ''}${entry.blocked ? ' · 已禁用' : ''}</option>`).join('')}</select></label><div class="pz-versionbody">${versionBody(tool, chosen)}</div>` : '<p class="pz-fine">本地尚无可选版本。检查更新可获取版本清单。</p>'}<div class="pz-actions">${button(pins().includes(tool.id) ? '取消固定' : '固定到工作台', 'pin', {id: tool.id})}${button('更多操作', 'more', {id: tool.id})}</div>`;
+    body = `<div class="pz-intro">${tile(tool, 'large')}<div><b>${esc(tool.category)}</b><p>${tool.installed ? `已安装 ${esc(version(tool.installedVersion))}` : '尚未安装'}</p></div></div><p>${esc(tool.description || '此工具暂未提供简介。')}</p>${tool.disabledReason ? `<p class="pz-error">${esc(tool.disabledReason)}</p>` : ''}${tool.availableVersions?.length ? `<label class="pz-field">版本详情<select id="tool-versions" data-id="${esc(tool.id)}">${tool.availableVersions.map(entry => `<option value="${esc(entry.version)}" ${entry.version === chosen ? 'selected' : ''}>${esc(version(entry.version))}${entry.version === tool.latestVersion ? ' · 最新版' : ''}${entry.version === tool.installedVersion ? ' · 已安装' : ''}${entry.blocked ? ' · 已禁用' : ''}</option>`).join('')}</select></label><div class="pz-versionbody">${versionBody(tool, chosen)}</div>` : '<p class="pz-fine">本地尚无可选版本。检查更新可获取版本清单。</p>'}<div class="pz-actions">${pinButton(tool)}${button('更多操作', 'more', {id: tool.id})}</div>`;
   } else if (modal.type === 'more' && tool) {
     title = `${tool.name} · 更多操作`;
     const menu = (label, action, actionName = '', className = '') => button(label, action, {id: tool.id, className: `pz-menuitem ${className}`, disabled: actionName ? !allows(tool, actionName) : false, title: actionName && !allows(tool, actionName) ? tool.disabledReason || '当前状态不可执行此操作。' : ''});
-    body = `<div class="pz-menu">${menu('在工作台查看', 'focus')}${menu('版本详情与切换', 'detail')}${tool.hasUpdate ? button(`更新至 ${version(tool.latestVersion)}`, 'request-operation', {id: tool.id, kind: 'update', selectedVersion: tool.latestVersion, className: 'pz-menuitem', disabled: !allows(tool, 'update')}) : ''}${menu(pins().includes(tool.id) ? '取消固定' : '固定到工作台', 'pin')}${menu('打开安装目录', 'open-folder', 'openFolder')}${menu('复制项目地址', 'copy-project', 'copyProjectUrl')}${menu('卸载工具', 'uninstall', 'uninstall', 'pz-danger')}</div>`;
+    body = `<div class="pz-menu">${pins().includes(tool.id) ? menu('在首页查看', 'focus') : ''}${menu('版本详情与切换', 'detail')}${tool.hasUpdate ? button(`更新至 ${version(tool.latestVersion)}`, 'request-operation', {id: tool.id, kind: 'update', selectedVersion: tool.latestVersion, className: 'pz-menuitem', disabled: !allows(tool, 'update')}) : ''}${pinButton(tool, {menu: true})}${menu('打开安装目录', 'open-folder', 'openFolder')}${menu('复制项目地址', 'copy-project', 'copyProjectUrl')}${menu('卸载工具', 'uninstall', 'uninstall', 'pz-danger')}</div>`;
   } else if (modal.type === 'confirm' && tool) {
     const labels = {uninstall: '卸载工具', reinstall: '重新安装此版本', switchVersion: '切换工具版本'};
     title = labels[modal.kind] || '确认工具操作';
@@ -505,19 +523,27 @@ async function refreshCatalog(showSelf = false, reason = 'manual') {
 }
 
 async function focusTool(id) {
-  if (!findTool(id)) return;
+  if (!findTool(id) || !pins().includes(id)) return;
+  const sessionId = state.sessionId;
   ui.selectedId = id;
   go('home');
-  try {state.preferences = await bridge.dispatch('preferences.selectTool', {toolId: id});}
+  try {
+    const preferences = await bridge.dispatch('preferences.selectTool', {toolId: id});
+    if (sessionId === state.sessionId) applyPreferences(state, preferences);
+  }
   catch (error) {toast(error.message);}
 }
 
 async function pinTool(id) {
   if (!findTool(id)) return;
   await run(`pin:${id}`, async () => {
+    const sessionId = state.sessionId;
     const pinned = !pins().includes(id);
-    state.preferences = await bridge.dispatch('preferences.setPinned', {toolId: id, pinned});
-    toast(pinned ? '已固定到工作台。' : '已取消固定。');
+    const preferences = await bridge.dispatch('preferences.setPinned', {toolId: id, pinned});
+    if (sessionId !== state.sessionId) return;
+    applyPreferences(state, preferences);
+    selectedTool();
+    toast(pinned ? '已固定到首页。' : '已取消首页固定。');
   });
 }
 

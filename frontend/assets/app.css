@@ -8,6 +8,25 @@
 @media(max-width:560px){.app-header{padding-left:16px;height:57px;min-height:57px}.wordmark strong{font-size:14px}.release{display:none}.window-controls button{width:29px}.search-shortcut{border:0}.header-utils{gap:2px!important}.hero-copy,.hero.no-art .hero-copy{max-width:94%}.hero h1{font-size:clamp(31px,8.3vw,42px);max-width:100%}.hero-en{font-size:18px}.hero-description{max-width:92%;font-size:13px}.hero-actions .hero-action{min-height:44px}.hero-more{min-height:44px;width:39px}.hero-disabled{bottom:72px;right:16px;max-width:90%}.hero-category-art{right:0;opacity:.2}.hero-category-art .initial{font-size:140px}.hero-meta{font-size:11px}.hero-foot{gap:8px}.slide-controls .counter{display:none}.pin-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.pin-info strong{font-size:12px}.library-tools{gap:8px}.library-tools select{max-width:112px}.row-main{gap:8px}.library-row{padding:11px 6px;gap:2px}.library-row .button{font-size:12px;min-width:66px;padding:5px 7px}.library-row>.icon-button{width:29px;flex:none}.row-main strong{font-size:13px}.row-main small{font-size:11px}.row-main .tool-tile{width:30px;height:30px;font-size:16px}.library-list .icon-button[data-act=pin]{display:none}.pz-page .pz-head{align-items:flex-start;gap:14px}.pz-head h1,.page-heading{font-size:26px}.pz-row .pz-btn{min-width:62px}.pz-row .pz-name{font-size:14px}.pz-jobline{flex-wrap:wrap;gap:8px}.pz-jobline .pz-grow{flex:1;min-width:120px}.pz-jobline .pz-actions{max-width:100%;width:100%;margin-top:2px}.pz-jobline>small{font-size:11px;max-width:85px;text-align:right}.pz-check{gap:12px}.pz-form{padding:16px}.pz-section h2{font-size:18px}.pz-check b{font-size:14px}.self-update .pz-actions{justify-content:flex-start}.self-update .pz-grow{flex-basis:100%}.pz-tabs{gap:18px}.pz-tabs button{font-size:13px}.pz-btn{min-height:40px;font-size:13px}.connection-state{padding:42px 20px}.connection-state h1{font-size:25px}.home-empty{padding:30px 16px}.app-footer{flex-wrap:wrap}.app-footer .link-button{font-size:11px}.section-heading .link-button{font-size:11px}.section-heading h2{font-size:17px}.pz-page .pz-head>.pz-actions{width:100%}}
 
 /* The home art reaches the window edge; chrome belongs to the page itself. */
+.pin-art-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:80% center}
+.pin-card[aria-pressed=true]{border-color:var(--accent);background:#302d21}
+.pin-card[aria-pressed=true] .pin-info strong{color:var(--accent)}
+.pin-button[aria-pressed=true]{background:var(--accent);color:#211d10;border-color:var(--accent)}
+.pin-button[aria-pressed=true] svg{fill:currentColor}
+.pin-button[aria-pressed=true]:hover:not(:disabled){background:#ffe489;color:#211d10}
+.pin-button[aria-pressed=false]:hover:not(:disabled){color:#fff}
+.slide-arrow{display:grid;place-items:center;width:30px;min-height:32px;border-radius:5px;background:#292b32;color:#f1f2f4}
+.slide-arrow:hover{background:#41444d}
+.slide-arrow.previous svg{transform:rotate(180deg)}
+.compact-pages{gap:8px}
+.compact-pages .counter{display:block;min-width:57px;margin:0;text-align:center}
+.home-empty .pz-empty{margin-top:24px}
+@media(max-width:560px){
+  .library-list .icon-button[data-act=pin]{display:inline-flex}
+  .hero-foot{flex-wrap:wrap}
+  .hero-actions{margin-inline-start:auto}
+  .shell[data-view=home] .hero:has(.compact-pages){min-height:460px;padding-bottom:112px}
+}
 .shell{--titlebar-height:46px;position:relative;min-width:0}
 .app-header{height:var(--titlebar-height);min-height:var(--titlebar-height);padding:0 0 0 var(--gutter);gap:18px;border:0;flex-shrink:0;position:sticky;top:0;z-index:3;justify-content:flex-start;background:var(--bg)}
 .wordmark{gap:9px;overflow:hidden;align-items:center}

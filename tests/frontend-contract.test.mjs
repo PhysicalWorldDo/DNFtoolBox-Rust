@@ -48,6 +48,17 @@ test('operation events replace only their own task and preserve host progress', 
   assert.equal(state.operations.find(x => x.id === 'op-b').state, 'queued');
 });
 
+test('same-session bootstrap keeps newer preferences while a new session can restart its revision', () => {
+  const state = model.createState();
+  model.applyBootstrap(state, snapshot());
+  model.applyEvent(state, {v: 1, sessionId: 'test-session', seq: 5, event: 'preferences.changed', data: {pinnedToolIds: ['new-pin'], revision: 3}});
+  model.applyBootstrap(state, snapshot());
+  assert.deepEqual(state.preferences.pinnedToolIds, ['new-pin']);
+  model.applyBootstrap(state, {...snapshot(), sessionId: 'new-session'});
+  assert.deepEqual(state.preferences.pinnedToolIds, []);
+  assert.equal(state.preferences.revision, 1);
+});
+
 test('available primary actions come from host actions and active operations', () => {
   assert.ok(model, 'production snapshot model must exist');
   const tool = {id: 'real-tool', installedVersion: '1.0', entryState: 'ready', actions: ['launch'], disabledReason: null};

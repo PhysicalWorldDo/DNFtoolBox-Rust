@@ -95,21 +95,7 @@ impl Service {
                 || json!({"schemaVersion":1,"pinnedToolIds":[],"lastSelectedToolId":null}),
             );
         preferences["revision"] = json!(1);
-        if preferences["lastSelectedToolId"].as_str().is_none_or(|id| {
-            !catalog.manifests.contains_key(id) && !catalog.installed.contains_key(id)
-        }) {
-            let selected = if catalog.manifests.contains_key("dnf_palette_prism") {
-                Some("dnf_palette_prism".to_string())
-            } else {
-                catalog
-                    .installed
-                    .keys()
-                    .next()
-                    .cloned()
-                    .or_else(|| catalog.index.tools.first().map(|t| t.id.clone()))
-            };
-            preferences["lastSelectedToolId"] = json!(selected);
-        }
+        reconcile_selected_pin(&mut preferences, &catalog);
         let mut operations = BTreeMap::new();
         if let Ok(entries) = fs::read_dir(workspace.join("cache/operations")) {
             for entry in entries.flatten() {
@@ -352,17 +338,28 @@ impl Service {
                 ensure_tool(&state, id)?;
                 let mut preferences = state.preferences.clone();
                 if request.method == "preferences.selectTool" {
-                    preferences["lastSelectedToolId"] = json!(id);
+                    if preferences["pinnedToolIds"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value == id)
+                    {
+                        preferences["lastSelectedToolId"] = json!(id);
+                    }
                 } else {
                     let pinned = params["pinned"]
                         .as_bool()
                         .ok_or_else(|| CoreError::invalid("pinned 必须为布尔值"))?;
                     let ids = preferences["pinnedToolIds"].as_array_mut().unwrap();
-                    ids.retain(|value| value != id);
                     if pinned {
-                        ids.push(json!(id));
+                        if !ids.iter().any(|value| value == id) {
+                            ids.push(json!(id));
+                        }
+                    } else {
+                        ids.retain(|value| value != id);
                     }
                 }
+                reconcile_selected_pin(&mut preferences, &state.catalog);
                 preferences["revision"] =
                     json!(state.preferences["revision"].as_u64().unwrap_or(0) + 1);
                 let mut disk = preferences.clone();
@@ -1339,12 +1336,30 @@ fn reconcile_interrupted(operation: &mut Operation, workspace: &Path, recovery: 
         );
     }
 }
+fn catalog_has_tool(catalog: &Catalog, id: &str) -> bool {
+    catalog.manifests.contains_key(id)
+        || catalog.installed.contains_key(id)
+        || catalog.index.tools.iter().any(|tool| tool.id == id)
+}
+fn reconcile_selected_pin(preferences: &mut Value, catalog: &Catalog) {
+    let ids = preferences["pinnedToolIds"].as_array().unwrap();
+    let selected = preferences["lastSelectedToolId"]
+        .as_str()
+        .filter(|id| {
+            ids.iter().any(|value| value.as_str() == Some(*id)) && catalog_has_tool(catalog, id)
+        })
+        .or_else(|| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .find(|id| catalog_has_tool(catalog, id))
+        })
+        .map(str::to_owned);
+    // Missing catalog entries may return later; only repair the current selection.
+    preferences["lastSelectedToolId"] = json!(selected);
+}
 fn ensure_tool(state: &State, id: &str) -> CoreResult<()> {
     validate_id(id)?;
-    if state.catalog.manifests.contains_key(id)
-        || state.catalog.installed.contains_key(id)
-        || state.catalog.index.tools.iter().any(|t| t.id == id)
-    {
+    if catalog_has_tool(&state.catalog, id) {
         Ok(())
     } else {
         Err(CoreError::invalid("工具不存在"))

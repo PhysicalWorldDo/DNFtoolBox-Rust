@@ -26,10 +26,11 @@ let snapshot = {
   catalog: {source: scenario === 'empty' ? 'empty' : 'cached', checkedAt: '2026-11-21T02:00:00Z', revision: 7, tools: scenario === 'empty' ? [] : [
     fixtureTool('dnf_palette_prism', '阿拉德调色', '图像工具', '1.0.0', '1.1.0', '预览 DNF 图像的调色盘，调整整组素材的配色。'),
     fixtureTool('rep_player', 'REP 播放器', '资源工具', '1.1.5', '1.2.3', '逐帧查看录像，预览声音并导出视频与图像。'),
-    fixtureTool('dnf_skill_prism', '技能棱镜', '资源工具', null, '1.0.0', '查看技能和动画素材。'),
+    fixtureTool('dnf_skill_prism', '技能染色工坊', '资源工具', null, '1.0.0', '为技能特效调整颜色，预览技能配色。'),
+    fixtureTool('dnf_avatar_studio', '薛定谔的化裁间', '图像工具', '1.0.0', '1.1.0', '浏览、搭配与预览角色时装。'),
     fixtureTool('dnf_music_detect', 'DNF 音乐识别', '音频工具', '1.0.0', '1.0.0', '识别与预览本地音乐资源。')
-  ], categories: ['图像工具', '资源工具', '音频工具'], updateCount: 2, newInstallCount: 1, error: scenario === 'offline' ? '测试场景：网络不可用，继续显示上次缓存。' : null},
-  preferences: {schemaVersion: 1, pinnedToolIds: scenario === 'empty' ? [] : ['rep_player', 'dnf_skill_prism', 'dnf_music_detect'], lastSelectedToolId: 'dnf_palette_prism', revision: 1},
+  ], categories: ['图像工具', '资源工具', '音频工具'], updateCount: 3, newInstallCount: 1, error: scenario === 'offline' ? '测试场景：网络不可用，继续显示上次缓存。' : null},
+  preferences: {schemaVersion: 1, pinnedToolIds: ['empty', 'no-pins'].includes(scenario) ? [] : ['rep_player', 'dnf_skill_prism', 'dnf_avatar_studio'], lastSelectedToolId: 'dnf_palette_prism', revision: 1},
   settings: {name: '物理世界的工具箱', indexUrl: 'https://example.invalid/test-only', channel: 'stable', githubProxy: {enabled: true, urls: ['https://example.invalid/proxy/']}, suppressDirectoryWarning: false, revision: 1},
   operations: [], toolbox: {version: '0.4.0', latestVersion: '0.4.0', hasUpdate: false, canDownload: false},
   about: {title: '物理世界的工具箱', author: '物理世界的欺骗', tagline: 'DNF 工具集', qqNumber: '1548220577', githubUrl: 'https://example.invalid/project', feedbackUrl: 'https://example.invalid/feedback', bilibiliUrl: 'https://example.invalid/author', sponsorQrs: [{id: 'weixin', title: '微信赞助', imageUrl: 'assets/sponsor-weixin.jpg'}, {id: 'zhifubao', title: '支付宝赞助', imageUrl: 'assets/sponsor-zhifubao.jpg'}], logs: []},
@@ -62,8 +63,8 @@ async function dispatch(request) {
     case 'catalog.tool': result = snapshot.catalog.tools.find(tool => tool.id === params.toolId); break;
     case 'catalog.refresh': snapshot.catalog.checkedAt = new Date().toISOString(); emit('catalog.changed', snapshot.catalog); result = snapshot.catalog; break;
     case 'preferences.setPinned': {
-      const ids = snapshot.preferences.pinnedToolIds.filter(id => id !== params.toolId);
-      if (params.pinned) ids.push(params.toolId);
+      const ids = params.pinned ? [...snapshot.preferences.pinnedToolIds] : snapshot.preferences.pinnedToolIds.filter(id => id !== params.toolId);
+      if (params.pinned && !ids.includes(params.toolId)) ids.push(params.toolId);
       result = {...snapshot.preferences, pinnedToolIds: ids, revision: snapshot.preferences.revision + 1}; emit('preferences.changed', result); break;
     }
     case 'preferences.selectTool': result = {...snapshot.preferences, lastSelectedToolId: params.toolId, revision: snapshot.preferences.revision + 1}; emit('preferences.changed', result); break;

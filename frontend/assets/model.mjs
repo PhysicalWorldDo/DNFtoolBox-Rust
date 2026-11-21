@@ -5,12 +5,23 @@ export function createState() {
 }
 
 export function applyBootstrap(state, snapshot) {
+  const newSession = state.sessionId !== snapshot.sessionId;
   state.sessionId = snapshot.sessionId;
   state.seq = snapshot.seq;
-  for (const field of ['catalog', 'preferences', 'settings', 'operations', 'toolbox', 'about', 'directoryWarning', 'capabilities']) {
+  for (const field of ['catalog', 'settings', 'operations', 'toolbox', 'about', 'directoryWarning', 'capabilities']) {
     if (snapshot[field] !== undefined) state[field] = snapshot[field];
   }
+  if (snapshot.preferences !== undefined) {
+    if (newSession) state.preferences = snapshot.preferences;
+    else applyPreferences(state, snapshot.preferences);
+  }
   return state;
+}
+
+export function applyPreferences(state, preferences) {
+  if ((preferences.revision ?? 0) < (state.preferences.revision ?? 0)) return false;
+  state.preferences = preferences;
+  return true;
 }
 
 export function applyEvent(state, message) {
@@ -18,8 +29,9 @@ export function applyEvent(state, message) {
   if (message.seq <= state.seq) return {ignored: true};
   if (message.seq !== state.seq + 1) return {resync: true};
   state.seq = message.seq;
-  const fields = {'catalog.changed': 'catalog', 'preferences.changed': 'preferences', 'settings.changed': 'settings', 'toolbox.changed': 'toolbox'};
+  const fields = {'catalog.changed': 'catalog', 'settings.changed': 'settings', 'toolbox.changed': 'toolbox'};
   if (fields[message.event]) state[fields[message.event]] = message.data;
+  if (message.event === 'preferences.changed') applyPreferences(state, message.data);
   if (message.event === 'window.changed') state.window = {...state.window, ...message.data};
   if (message.event === 'operation.changed') {
     const index = state.operations.findIndex(operation => operation.id === message.data.id);
