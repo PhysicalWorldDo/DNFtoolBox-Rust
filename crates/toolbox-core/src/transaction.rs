@@ -2,6 +2,7 @@ use crate::{
     catalog::load_installed,
     model::{Installed, Manifest, ToolVersion},
     network::{check_cancel, ensure_space},
+    package::PackageManifest,
     paths::{
         atomic_json, hash_file, managed, plain_tree, publish_new_file, read_json, relative,
         remove_path, replace_file, validate_id,
@@ -220,23 +221,24 @@ pub(crate) fn prepare(
     Ok(candidate)
 }
 fn validate_package(root: &Path, manifest: &Manifest, version: &ToolVersion) -> CoreResult<()> {
-    let package: Manifest = serde_json::from_value(read_json(&managed(root, "tool.json")?)?)?;
-    package.validate()?;
-    if package.id != manifest.id
-        || package.entry != manifest.entry
-        || !package
-            .versions
-            .iter()
-            .any(|v| v.version == version.version && v.channel == version.channel)
-    {
-        return Err(CoreError::invalid(
-            "包内工具 ID、版本或入口与 Registry 不一致",
-        ));
-    }
-    if !managed(root, &manifest.entry)?.is_file() {
-        return Err(CoreError::new("MISSING_ENTRY", "安装包缺少登记入口"));
-    }
-    Ok(())
+    (|| {
+        let package = PackageManifest::from_value(read_json(&managed(root, "tool.json")?)?)?;
+        package.validate_request(manifest, version)?;
+        if !managed(root, &manifest.entry)?.is_file() {
+            return Err(CoreError::new(
+                "MISSING_ENTRY",
+                format!("安装包缺少登记入口 {:?}", manifest.entry),
+            ));
+        }
+        Ok(())
+    })()
+    .map_err(|mut error: CoreError| {
+        error.message = format!(
+            "工具 {:?}（请求 version={:?}, channel={:?}）：{}",
+            manifest.id, version.version, version.channel, error.message
+        );
+        error
+    })
 }
 fn tree_size(root: &Path) -> CoreResult<u64> {
     plain_tree(root)?;
@@ -635,6 +637,178 @@ pub(crate) fn recover(workspace: &Path) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
+
+    fn registry_manifest() -> Manifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "id": "dnf_avatar_studio",
+            "name": "薛定谔的化裁间",
+            "entry": "bin/run.cmd",
+            "latest": {"stable": "2.2.0"},
+            "versions": [{"version": "2.2.0", "channel": "stable"}]
+        }))
+        .unwrap()
+    }
+
+    fn short_package() -> Value {
+        json!({
+            "schemaVersion": 1,
+            "id": "dnf_avatar_studio",
+            "name": "薛定谔的化裁间",
+            "category": "图像工具",
+            "description": "时装预览、染色和换装",
+            "version": "2.2.0",
+            "entry": "bin/run.cmd",
+            "needAdmin": false
+        })
+    }
+
+    fn validate_package_json(raw: Value, channel: &str) -> CoreResult<()> {
+        let test_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-work");
+        fs::create_dir_all(&test_root).unwrap();
+        let dir = tempfile::tempdir_in(test_root).unwrap();
+        fs::create_dir_all(dir.path().join("bin")).unwrap();
+        fs::write(dir.path().join("bin/run.cmd"), "@exit /b 0").unwrap();
+        atomic_json(&dir.path().join("tool.json"), &raw).unwrap();
+        let manifest = registry_manifest();
+        let mut version = manifest.versions[0].clone();
+        version.channel = channel.into();
+        validate_package(dir.path(), &manifest, &version)
+    }
+
+    #[test]
+    fn short_package_descriptor_accepts_exact_version_and_defaults_to_stable_channel() {
+        validate_package_json(short_package(), "stable").unwrap();
+    }
+
+    #[test]
+    fn short_package_descriptor_accepts_its_explicit_channel() {
+        let mut package = short_package();
+        package["channel"] = json!("beta");
+        validate_package_json(package, "beta").unwrap();
+    }
+
+    #[test]
+    fn legacy_package_manifest_remains_accepted() {
+        validate_package_json(serde_json::to_value(registry_manifest()).unwrap(), "stable")
+            .unwrap();
+    }
+
+    #[test]
+    fn versionless_package_metadata_can_be_read_but_cannot_be_installed() {
+        let mut package = short_package();
+        package.as_object_mut().unwrap().remove("version");
+        let metadata = PackageManifest::from_value(package.clone()).unwrap();
+        assert!(metadata.installed_version().is_none());
+        let error = validate_package_json(package, "stable").unwrap_err();
+        assert_eq!(error.code, "INVALID_ARGUMENT");
+        assert!(
+            error
+                .message
+                .contains("请求 version=\"2.2.0\", channel=\"stable\""),
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("缺少顶层 version 或非空 versions 声明"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn package_mismatch_errors_identify_the_tool_request_and_actual_field() {
+        for (field, value, expected) in [
+            (
+                "id",
+                "other_tool",
+                "Registry.id=\"dnf_avatar_studio\"，tool.json.id=\"other_tool\"",
+            ),
+            (
+                "entry",
+                "bin/old.cmd",
+                "Registry.entry=\"bin/run.cmd\"，tool.json.entry=\"bin/old.cmd\"",
+            ),
+            (
+                "version",
+                "2.0.4",
+                "tool.json 声明=[(\"2.0.4\", \"stable\")]",
+            ),
+            ("channel", "beta", "tool.json 声明=[(\"2.2.0\", \"beta\")]"),
+        ] {
+            let mut package = short_package();
+            package[field] = json!(value);
+            let error = validate_package_json(package, "stable").unwrap_err();
+            assert_eq!(error.code, "INVALID_ARGUMENT");
+            assert!(
+                error.message.starts_with(
+                    "工具 \"dnf_avatar_studio\"（请求 version=\"2.2.0\", channel=\"stable\"）："
+                ),
+                "{}",
+                error.message
+            );
+            assert!(error.message.contains(expected), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn legacy_package_version_mismatch_reports_every_declared_version_and_channel() {
+        let mut package = serde_json::to_value(registry_manifest()).unwrap();
+        package["latest"] = json!({"stable": "2.0.4", "beta": "2.2.0"});
+        package["versions"] = json!([
+            {"version": "2.0.4", "channel": "stable"},
+            {"version": "2.2.0", "channel": "beta"}
+        ]);
+        let error = validate_package_json(package, "stable").unwrap_err();
+        assert_eq!(error.code, "INVALID_ARGUMENT");
+        assert!(
+            error
+                .message
+                .contains("请求 version=\"2.2.0\", channel=\"stable\""),
+            "{}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("tool.json 声明=[(\"2.0.4\", \"stable\"), (\"2.2.0\", \"beta\")]"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn package_rejects_contradictory_top_level_and_legacy_versions() {
+        for (version, versions) in [
+            ("2.0.4", json!([{"version": "2.2.0", "channel": "stable"}])),
+            ("2.2.0", json!([{"version": "2.0.4", "channel": "stable"}])),
+            ("2.2.0", json!([{"version": "2.2.0", "channel": "beta"}])),
+        ] {
+            let mut package = short_package();
+            package["version"] = json!(version);
+            package["versions"] = versions;
+            let error = validate_package_json(package, "stable").unwrap_err();
+            assert!(error.message.contains("顶层 version="), "{}", error.message);
+            assert!(error.message.contains("versions"), "{}", error.message);
+        }
+
+        let mut package = short_package();
+        package["versions"] = json!([
+            {"version": "2.0.4", "channel": "stable"},
+            {"version": "2.2.0", "channel": "stable"}
+        ]);
+        package["latest"] = json!({"stable": "2.0.4"});
+        let error = validate_package_json(package, "stable").unwrap_err();
+        assert!(
+            error.message.contains("latest.stable=\"2.0.4\""),
+            "{}",
+            error.message
+        );
+    }
+
     #[test]
     fn failed_state_commit_restores_files_and_recovery_is_repeatable() {
         let test_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-work");

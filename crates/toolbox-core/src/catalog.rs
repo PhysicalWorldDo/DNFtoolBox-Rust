@@ -1,6 +1,7 @@
 use crate::{
     compare_versions,
     model::{Index, Installed, Manifest, ToolVersion},
+    package::PackageManifest,
     paths::{managed, plain_tree, read_json, valid_hash, validate_id},
     settings::Settings,
     CoreError, CoreResult,
@@ -242,33 +243,34 @@ impl Catalog {
                 {
                     continue;
                 }
-                if let Ok(raw) = read_json(&entry.path().join("tool.json")) {
-                    if let Ok(manifest) = serde_json::from_value::<Manifest>(raw) {
-                        if manifest.id != id || manifest.validate().is_err() {
-                            continue;
-                        }
-                        if !catalog.installed.contains_key(&id) {
-                            if let Some(version) = manifest.latest.get("stable").and_then(|v| {
-                                manifest.versions.iter().find(|item| &item.version == v)
-                            }) {
-                                catalog.installed.insert(
-                                    id.clone(),
-                                    Installed {
-                                        id: id.clone(),
-                                        name: manifest.name.clone(),
-                                        version: version.version.clone(),
-                                        channel: version.channel.clone(),
-                                        entry: manifest.entry.clone(),
-                                        installed_at: String::new(),
-                                        updated_at: String::new(),
-                                        extra: BTreeMap::new(),
-                                    },
-                                );
-                            }
-                        }
-                        catalog.manifests.entry(id).or_insert(manifest);
-                    }
+                let Ok(package) = read_json(&entry.path().join("tool.json"))
+                    .and_then(PackageManifest::from_value)
+                else {
+                    continue;
+                };
+                let local_version = package
+                    .installed_version()
+                    .map(|v| (v.version.clone(), v.channel.clone()));
+                let manifest = package.into_manifest();
+                if manifest.id != id {
+                    continue;
                 }
+                if let Some((version, channel)) = local_version {
+                    catalog
+                        .installed
+                        .entry(id.clone())
+                        .or_insert_with(|| Installed {
+                            id: id.clone(),
+                            name: manifest.name.clone(),
+                            version,
+                            channel,
+                            entry: manifest.entry.clone(),
+                            installed_at: String::new(),
+                            updated_at: String::new(),
+                            extra: BTreeMap::new(),
+                        });
+                }
+                catalog.manifests.entry(id).or_insert(manifest);
             }
         }
         if catalog.source == "empty"

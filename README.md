@@ -31,6 +31,6 @@ pwsh -File scripts/package.ps1
 
 脚本会定位 Windows 资源编译器，构建并检查 EXE 的 DLL 依赖，将可执行文件与单文件 ZIP 写入 `dist/`。只需编译时执行 `pwsh -File scripts/build.ps1`，产物位于 `target/x86_64-pc-windows-msvc/release/PhysicalWorldToolbox.exe`。
 
-发行物的校验值、测试结果与复跑命令见 [0.4.0 本地发行验收](tests/ACCEPTANCE.md)。
+发行物的校验值、测试结果与复跑命令见[本地发行验收](tests/ACCEPTANCE.md)。
 
 本项目沿用 [GPL-3.0 许可证](LICENSE)。

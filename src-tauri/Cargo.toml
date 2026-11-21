@@ -1,6 +1,6 @@
 [package]
 name = "physical-world-toolbox"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.89"
 description = "物理世界的工具箱桌面宿主"

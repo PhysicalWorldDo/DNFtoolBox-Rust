@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "physical-world-toolbox"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -4083,7 +4083,7 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "toolbox-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "fs2",

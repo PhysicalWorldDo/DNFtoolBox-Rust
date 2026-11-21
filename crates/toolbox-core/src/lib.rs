@@ -2,6 +2,7 @@
 mod catalog;
 mod model;
 mod network;
+mod package;
 mod paths;
 mod service;
 mod settings;

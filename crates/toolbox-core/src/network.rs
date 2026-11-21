@@ -33,7 +33,7 @@ fn client(timeout: u64) -> CoreResult<Client> {
         .no_proxy()
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(timeout))
-        .user_agent("PhysicalWorldToolbox/0.4.0")
+        .user_agent(concat!("PhysicalWorldToolbox/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| CoreError::new("NETWORK", e.to_string()))

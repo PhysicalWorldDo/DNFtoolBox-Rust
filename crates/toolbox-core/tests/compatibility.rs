@@ -80,6 +80,66 @@ fn offline_catalog_uses_install_record_and_cache_without_writing() {
 }
 
 #[test]
+fn offline_catalog_recovers_single_version_package_without_a_download_source() {
+    for channel in [None, Some("beta")] {
+        let dir = sandbox();
+        let mut package = json!({
+            "schemaVersion": 1,
+            "id": "dnf_avatar_studio",
+            "name": "薛定谔的化裁间",
+            "entry": "bin/run.cmd",
+            "version": "2.0.4"
+        });
+        if let Some(value) = channel {
+            package["channel"] = json!(value);
+            write_json(dir.path(), "config/app.json", json!({"channel": value}));
+        }
+        write_json(dir.path(), "tools/dnf_avatar_studio/tool.json", package);
+        let bin = dir.path().join("tools/dnf_avatar_studio/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("run.cmd"), "@exit /b 0").unwrap();
+
+        let service = Service::open_read_only(dir.path(), "0.4.1").unwrap();
+        let boot = service.bootstrap();
+        let tool = &boot["catalog"]["tools"][0];
+        assert_eq!(tool["installedVersion"], "2.0.4");
+        assert_eq!(tool["entryState"], "ready");
+        assert!(tool["actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("launch")));
+        let version = &tool["availableVersions"][0];
+        assert_eq!(version["channel"], channel.unwrap_or("stable"));
+        assert_eq!(version["canInstall"], false);
+        assert!(!dir.path().join("config/installed.json").exists());
+    }
+}
+
+#[test]
+fn installed_record_can_use_an_offline_descriptor_without_version_information() {
+    let dir = sandbox();
+    write_json(
+        dir.path(),
+        "config/installed.json",
+        json!({"tools":{"old":{
+            "id":"old","name":"工具","entry":"run.cmd","version":"1.0.0"
+        }}}),
+    );
+    write_json(
+        dir.path(),
+        "tools/old/tool.json",
+        json!({
+            "id":"old","name":"工具","entry":"run.cmd","category":"图像工具"
+        }),
+    );
+    let service = Service::open_read_only(dir.path(), "0.4.1").unwrap();
+    let tool = &service.bootstrap()["catalog"]["tools"][0];
+    assert_eq!(tool["category"], "图像工具");
+    assert_eq!(tool["installedVersion"], "1.0.0");
+    assert!(tool["availableVersions"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn about_provides_the_complete_qq_channel_invitation() {
     let dir = sandbox();
     let service = Service::open(dir.path(), "0.4.0").unwrap();
@@ -126,7 +186,8 @@ fn about_keeps_the_eleven_legacy_release_notes() {
     let service = Service::open(dir.path(), "0.4.0").unwrap();
     let boot = service.bootstrap();
     let logs = boot["about"]["logs"].as_array().unwrap();
-    assert_eq!(logs.len(), 12);
+    assert_eq!(logs.len(), 13);
+    assert_eq!(logs[0]["version"], "v0.4.1");
     assert!(logs.iter().any(|log| log["version"] == "v0.3.0"));
     assert!(logs.iter().any(|log| log["version"] == "v0.1.0"));
 }
