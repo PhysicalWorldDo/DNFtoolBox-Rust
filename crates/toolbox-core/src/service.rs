@@ -20,6 +20,10 @@ use std::{
 };
 use tokio::sync::broadcast;
 
+const QQ_CHANNEL_URL: &str = "https://pd.qq.com/s/g907v9hdc";
+const QQ_CHANNEL_TEXT: &str =
+    "QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：https://pd.qq.com/s/g907v9hdc";
+
 pub struct Service {
     workspace: PathBuf,
     app_version: String,
@@ -1210,7 +1214,7 @@ impl Service {
                 let url = self.project_url(required(params, "toolId")?)?;
                 Ok(NativeAction::CopyText(url))
             }
-            "about.copyContact" => Ok(NativeAction::CopyText("1548220577".into())),
+            "about.copyContact" => Ok(NativeAction::CopyText(QQ_CHANNEL_TEXT.into())),
             "system.openLink" => {
                 let target = required(params, "target")?;
                 let url = match target {
@@ -1226,6 +1230,7 @@ impl Service {
                         .clone(),
                     "feedback" => "https://github.com/PhysicalWorldDo/DNFTOOLBOX/issues".into(),
                     "author" => "https://space.bilibili.com/492488982".into(),
+                    "qq-channel" => QQ_CHANNEL_URL.into(),
                     "homepage" => "https://github.com/PhysicalWorldDo/DNFTOOLBOX".into(),
                     _ => return Err(CoreError::invalid("不支持此链接目标")),
                 };
@@ -1379,7 +1384,7 @@ fn validate_https(value: &str) -> CoreResult<()> {
 fn about() -> Value {
     let logs: Value = serde_json::from_str(include_str!("about-history.json"))
         .expect("embedded release history is valid JSON");
-    json!({"title":"物理世界的工具箱","author":"物理世界的欺骗","tagline":"集中安装、更新、启动和管理 DNF 工具的桌面工具箱。","qqNumber":"1548220577","bilibiliUrl":"https://space.bilibili.com/492488982","githubUrl":"https://github.com/PhysicalWorldDo/DNFTOOLBOX","feedbackUrl":"https://github.com/PhysicalWorldDo/DNFTOOLBOX/issues","sponsorQrs":[{"id":"weixin","title":"微信赞助","imageUrl":"assets/sponsor-weixin.jpg"},{"id":"zhifubao","title":"支付宝赞助","imageUrl":"assets/sponsor-zhifubao.jpg"}],"logs":logs})
+    json!({"title":"物理世界的工具箱","author":"物理世界的欺骗","tagline":"集中安装、更新、启动和管理 DNF 工具的桌面工具箱。","qqChannelUrl":QQ_CHANNEL_URL,"qqChannelText":QQ_CHANNEL_TEXT,"bilibiliUrl":"https://space.bilibili.com/492488982","githubUrl":"https://github.com/PhysicalWorldDo/DNFTOOLBOX","feedbackUrl":"https://github.com/PhysicalWorldDo/DNFTOOLBOX/issues","sponsorQrs":[{"id":"weixin","title":"微信赞助","imageUrl":"assets/sponsor-weixin.jpg"},{"id":"zhifubao","title":"支付宝赞助","imageUrl":"assets/sponsor-zhifubao.jpg"}],"logs":logs})
 }
 fn directory_warning(workspace: &Path, suppressed: bool) -> Value {
     let name = workspace.to_string_lossy();

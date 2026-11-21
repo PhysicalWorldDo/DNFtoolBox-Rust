@@ -33,7 +33,7 @@ let snapshot = {
   preferences: {schemaVersion: 1, pinnedToolIds: ['empty', 'no-pins'].includes(scenario) ? [] : ['rep_player', 'dnf_skill_prism', 'dnf_avatar_studio'], lastSelectedToolId: 'dnf_palette_prism', revision: 1},
   settings: {name: '物理世界的工具箱', indexUrl: 'https://example.invalid/test-only', channel: 'stable', githubProxy: {enabled: true, urls: ['https://example.invalid/proxy/']}, suppressDirectoryWarning: false, revision: 1},
   operations: [], toolbox: {version: '0.4.0', latestVersion: '0.4.0', hasUpdate: false, canDownload: false},
-  about: {title: '物理世界的工具箱', author: '物理世界的欺骗', tagline: 'DNF 工具集', qqNumber: '1548220577', githubUrl: 'https://example.invalid/project', feedbackUrl: 'https://example.invalid/feedback', bilibiliUrl: 'https://example.invalid/author', sponsorQrs: [{id: 'weixin', title: '微信赞助', imageUrl: 'assets/sponsor-weixin.jpg'}, {id: 'zhifubao', title: '支付宝赞助', imageUrl: 'assets/sponsor-zhifubao.jpg'}], logs: []},
+  about: {title: '物理世界的工具箱', author: '物理世界的欺骗', tagline: 'DNF 工具集', qqChannelUrl: 'https://pd.qq.com/s/g907v9hdc', qqChannelText: 'QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：https://pd.qq.com/s/g907v9hdc', githubUrl: 'https://example.invalid/project', feedbackUrl: 'https://example.invalid/feedback', bilibiliUrl: 'https://example.invalid/author', sponsorQrs: [{id: 'weixin', title: '微信赞助', imageUrl: 'assets/sponsor-weixin.jpg'}, {id: 'zhifubao', title: '支付宝赞助', imageUrl: 'assets/sponsor-zhifubao.jpg'}], logs: []},
   directoryWarning: {show: false, message: '', workspace: 'E:\\UI 合同验收\\工具箱'}, capabilities: {install: true, launch: true, selfUpdate: true, cancel: true, openWorkspace: true}
 };
 if (source) {const input = JSON.parse(await fs.readFile(path.resolve(source), 'utf8')); snapshot = input.result || input;}

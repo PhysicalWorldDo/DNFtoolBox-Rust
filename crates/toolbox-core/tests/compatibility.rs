@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::{cmp::Ordering, fs, path::PathBuf};
 use tempfile::TempDir;
-use toolbox_core::{compare_versions, validate_entry, Service};
+use toolbox_core::{compare_versions, validate_entry, NativeAction, Service};
 
 fn sandbox() -> TempDir {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-work");
@@ -72,7 +72,52 @@ fn offline_catalog_uses_install_record_and_cache_without_writing() {
     assert_eq!(boot["catalog"]["tools"][0]["entryState"], "ready");
     assert_eq!(boot["catalog"]["tools"][0]["latestVersion"], "1.1.0");
     assert_eq!(boot["toolbox"]["hasUpdate"], false);
+    assert_eq!(
+        boot["about"]["qqChannelUrl"],
+        "https://pd.qq.com/s/g907v9hdc"
+    );
     assert!(!dir.path().join("config/app.json").exists());
+}
+
+#[test]
+fn about_provides_the_complete_qq_channel_invitation() {
+    let dir = sandbox();
+    let service = Service::open(dir.path(), "0.4.0").unwrap();
+    let boot = service.bootstrap();
+    assert_eq!(
+        boot["about"]["qqChannelUrl"],
+        "https://pd.qq.com/s/g907v9hdc"
+    );
+    assert_eq!(
+        boot["about"]["qqChannelText"],
+        "QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：https://pd.qq.com/s/g907v9hdc"
+    );
+    assert!(boot["about"]["qqNumber"].is_null());
+}
+
+#[test]
+fn qq_channel_uses_the_controlled_native_link_target() {
+    let dir = sandbox();
+    let service = Service::open(dir.path(), "0.4.0").unwrap();
+    let action = service
+        .resolve_action(
+            "system.openLink",
+            &json!({"target":"qq-channel","url":"https://example.invalid"}),
+        )
+        .unwrap();
+    assert!(matches!(action, NativeAction::OpenUrl(url) if url == "https://pd.qq.com/s/g907v9hdc"));
+}
+
+#[test]
+fn legacy_copy_contact_copies_the_channel_invitation() {
+    let dir = sandbox();
+    let service = Service::open(dir.path(), "0.4.0").unwrap();
+    let action = service
+        .resolve_action("about.copyContact", &json!({}))
+        .unwrap();
+    assert!(
+        matches!(action, NativeAction::CopyText(text) if text == "QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：https://pd.qq.com/s/g907v9hdc")
+    );
 }
 
 #[test]

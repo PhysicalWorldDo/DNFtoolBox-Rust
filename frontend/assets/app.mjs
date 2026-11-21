@@ -256,10 +256,12 @@ function selfUpdateBody() {
 
 function renderAbout() {
   const about = state.about;
+  const channelUrl = about.qqChannelUrl || 'https://pd.qq.com/s/g907v9hdc';
+  const channelText = about.qqChannelText || `QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：${channelUrl}`;
   const links = [[about.githubUrl, 'GitHub 项目', 'project'], [about.feedbackUrl, '问题反馈', 'feedback'], [about.bilibiliUrl, '作者 B 站', 'author']].filter(([url]) => url).map(([, label, target]) => button(label, 'link', {id: target})).join('');
   const logs = (about.logs || []).map((log, index) => `<details class="pz-log" ${index === 0 ? 'open' : ''}><summary>${esc(version(log.version))} <span>${esc(log.date || '')}</span></summary>${notes(log.items)}</details>`).join('');
   const sponsors = (about.sponsorQrs || []).map(item => button(item.title, 'sponsor', {id: item.id})).join('');
-  return `<section class="page-wrap pz-page">${heading('关于工具箱', about.tagline || 'DNF 工具集')}<section class="pz-section"><h2>${esc(about.title || '物理世界的工具箱')}</h2><p>在一个桌面入口安装、更新、启动和管理 DNF 工具。当前版本 ${esc(version(state.toolbox.version))}。</p>${about.author ? `<p>作者 · ${esc(about.author)}</p>` : ''}<div class="pz-actions">${links}${about.qqNumber ? button('联系作者', 'contact') : ''}</div></section><section class="pz-section"><h2>工具箱更新记录</h2>${logs || '<p class="pz-fine">当前工作区没有更新记录。</p>'}</section>${sponsors ? `<section class="pz-section"><h2>赞助支持</h2><p>如果工具箱帮到了你，可以请作者喝杯咖啡。</p><div class="pz-actions">${sponsors}</div></section>` : ''}<section class="pz-section"><h2>本地运行</h2><p>界面与静态资源随工具箱程序提供。目录缓存和已安装工具可离线读取，安装与更新由本地宿主管理。</p>${selfUpdateBody()}</section></section>`;
+  return `<section class="page-wrap pz-page">${heading('关于工具箱', about.tagline || 'DNF 工具集')}<section class="pz-section"><h2>${esc(about.title || '物理世界的工具箱')}</h2><p>在一个桌面入口安装、更新、启动和管理 DNF 工具。当前版本 ${esc(version(state.toolbox.version))}。</p>${about.author ? `<p>作者 · ${esc(about.author)}</p>` : ''}<div class="pz-actions">${links}</div><p><a href="${esc(channelUrl)}" data-act="link" data-id="qq-channel">${esc(channelText)}</a></p></section><section class="pz-section"><h2>工具箱更新记录</h2>${logs || '<p class="pz-fine">当前工作区没有更新记录。</p>'}</section>${sponsors ? `<section class="pz-section"><h2>赞助支持</h2><p>如果工具箱帮到了你，可以请作者喝杯咖啡。</p><div class="pz-actions">${sponsors}</div></section>` : ''}<section class="pz-section"><h2>本地运行</h2><p>界面与静态资源随工具箱程序提供。目录缓存和已安装工具可离线读取，安装与更新由本地宿主管理。</p>${selfUpdateBody()}</section></section>`;
 }
 
 function notes(lines) {
@@ -388,9 +390,6 @@ function renderModal() {
   } else if (modal.type === 'apply-self') {
     title = '应用工具箱更新';
     body = `<p>更新到 ${esc(version(state.toolbox.latestVersion))}。工具箱将关闭并重新打开，已安装工具及配置会保留。</p>${activeTask() ? '<p class="native-close-note">请等待当前安装任务完成后再应用更新。</p>' : ''}<div class="pz-actions">${button('稍后', 'close')}${button('应用更新并重启', 'confirm-apply-self', {id: modal.id, className: 'primary', disabled: Boolean(activeTask()) || ui.pending.has('self-apply')})}</div>`;
-  } else if (modal.type === 'contact') {
-    title = '联系作者';
-    body = `<p>${esc(state.about.author || '作者')} · QQ ${esc(state.about.qqNumber || '')}</p><div class="pz-actions">${button('复制联系信息', 'copy-contact')}</div>`;
   } else if (modal.type === 'sponsor') {
     const sponsor = state.about.sponsorQrs?.find(item => item.id === modal.id);
     const source = imageUrl(sponsor?.imageUrl);
@@ -651,8 +650,6 @@ async function handleAction(element) {
     case 'copy-project': return run(`copy:${id}`, async () => {await bridge.dispatch('tool.copyProjectUrl', {toolId: id}); toast('项目地址已复制。');});
     case 'workspace': return run('workspace', () => bridge.dispatch('system.openWorkspace'));
     case 'link': return run(`link:${id}`, () => bridge.dispatch('system.openLink', {target: id}));
-    case 'contact': return openModal('contact');
-    case 'copy-contact': return run('contact', async () => {await bridge.dispatch('about.copyContact'); toast('联系信息已复制。');});
     case 'sponsor': return openModal('sponsor', {id});
     case 'refresh': return refreshCatalog();
     case 'self-check': return refreshCatalog(true);
@@ -700,6 +697,7 @@ document.addEventListener('click', event => {
   if (element.hasAttribute('data-page')) {go(element.dataset.page); return;}
   if (element.hasAttribute('data-category')) {ui.category = element.dataset.category; render(); return;}
   if (element.hasAttribute('data-tab')) {ui.tab = element.dataset.tab; render(); return;}
+  if (element.tagName === 'A' && element.dataset.act === 'link') event.preventDefault();
   handleAction(element).catch(error => showError(error));
 });
 document.addEventListener('input', event => {
