@@ -1,5 +1,20 @@
 # Windows x64 本地发行验收
 
+## 0.4.1 化裁间从 2.0.4 更新到 2.2.0
+
+2026-11-22，构建源码 `7be8958`。使用[化裁间正式发行包](https://github.com/PhysicalWorldDo/DNF-Avatar-Studio/releases/tag/v2.2.0)和[发布时的 Registry 清单](https://raw.githubusercontent.com/PhysicalWorldDo/DNFTOOLBOX-Registry/2929c7ed5aeb31dfe8130d3a14b19287d7cd32c1/tools/dnf_avatar_studio.json)。2.2.0 ZIP 为 6,727,442 字节，SHA-256 为 `28505318f0844dde6f33ca7dcdae0828d34335162f682264512863e0a4882627`。包内通过顶层 `version` 标明版本，入口为 `bin/run.cmd`。
+
+隔离工作区先还原 2.0.4 和旧安装记录。0.4.0 报出附件中的清单不一致错误，原工具文件和安装记录与操作前逐字节相同。关闭测试下载源，在同一工作区用 0.4.1 重试，成功复用缓存并升级至 2.2.0。安装后的四个发行文件均与 ZIP 内容校验一致，测试用配置和数据、原安装时间、安装记录中的额外字段均得到保留。可在 `.work/update-incident-qa/` 查看新旧 EXE 的对照记录。
+
+发行 EXE 的 12 个安装场景通过。工具 ID、入口、版本、渠道或哈希错误时，安装器拒绝替换，旧版文件和安装记录保持完整。使用成功升级后的真实后端快照，在 Codex 内置浏览器中确认工具库显示化裁间 v2.2.0「已安装」，关于页显示工具箱 v0.4.1。界面记录位于 `.work/update-publish-evidence/`。
+
+65 项 Rust 测试和 46 项前端测试通过。便携 ZIP 根目录只有一个 EXE，解压后与下列单独的 EXE 校验一致。
+
+| 文件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `dist/PhysicalWorldToolbox.exe` | 15,314,944 | `2d58504dcd1828fff7f2ea63f6b688baaf8caf0ca18f4ab1c7ef08c3acda3cd7` |
+| `dist/PhysicalWorldToolbox-0.4.1-win-x64.zip` | 6,242,960 | `faa26bcd8e7b8bb95af9d50dcf4f8824d9821ebc03bd4df9f52be440ad97184b` |
+
 ## 0.4.0 首页固定卡片的单击和双击
 
 2026-11-21，构建源码 `7a8dfce`。46 项前端测试通过。独立验收使用 Codex 内置浏览器，在 960 × 640 的首页滚动到第 2、3 行后，分别点击完全可见的固定卡。旧版单击会从 352 像素回到页顶，新版切换当前工具后滚动位置仍为 352 像素，焦点仍在点击的卡片上。
