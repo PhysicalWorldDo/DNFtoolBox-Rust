@@ -1,5 +1,16 @@
 # Windows x64 本地发行验收
 
+## 0.4.0 关于页 QQ 频道邀请
+
+2026-11-21，构建源码 `cdf078d`。关于页直接展示邀请文案与链接。内置浏览器在 1280 × 720 和 390 × 844 下验证了完整文案和换行；鼠标点击、键盘回车各产生一次 `system.openLink` 请求，目标均为 `qq-channel`，页面停留在关于页。受控测试桥记录请求，Rust 测试核对该目标解析为 `https://pd.qq.com/s/g907v9hdc`。35 项前端测试和 36 项 Rust 核心测试通过。
+
+| 文件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `dist/PhysicalWorldToolbox.exe` | 15,297,024 | `0dc2d25bee7293313de95c9a391212fe5a3a70c1b3eb516b4d0a5248a6cecac1` |
+| `dist/PhysicalWorldToolbox-0.4.0-win-x64.zip` | 6,237,602 | `f77f3c77e253518ac13082e6fa62c371c07e56e754bd921022bf402a972fcae4` |
+
+ZIP 中唯一的 EXE 与单独交付的 EXE 校验一致。界面与宿主诊断记录保存在 `.work/qq-contact-qa/`。
+
 ## 0.4.0 化裁间激光裁床封面
 
 2026-11-21，构建源码 `7f6f736`。化裁间首页大图和固定卡片共用 1915 × 821 的 WebP，画面为激光切割头、蜂窝裁床与平铺面料。32 项前端测试通过，随包资源经 Windows x64 Release 构建嵌入。已核对便携 ZIP 中唯一的 EXE 与单独交付的文件逐字节一致。[化裁间首页](home-tailoring-desktop.jpg) · [其他工具首页上的化裁间缩略图](home-skill-desktop.jpg)
