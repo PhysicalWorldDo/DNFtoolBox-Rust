@@ -18,8 +18,9 @@ export function applyEvent(state, message) {
   if (message.seq <= state.seq) return {ignored: true};
   if (message.seq !== state.seq + 1) return {resync: true};
   state.seq = message.seq;
-  const fields = {'catalog.changed': 'catalog', 'preferences.changed': 'preferences', 'settings.changed': 'settings', 'toolbox.changed': 'toolbox', 'window.changed': 'window'};
+  const fields = {'catalog.changed': 'catalog', 'preferences.changed': 'preferences', 'settings.changed': 'settings', 'toolbox.changed': 'toolbox'};
   if (fields[message.event]) state[fields[message.event]] = message.data;
+  if (message.event === 'window.changed') state.window = {...state.window, ...message.data};
   if (message.event === 'operation.changed') {
     const index = state.operations.findIndex(operation => operation.id === message.data.id);
     if (index === -1) state.operations.push(message.data);

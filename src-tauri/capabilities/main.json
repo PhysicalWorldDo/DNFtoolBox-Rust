@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Only the embedded main window may call the semantic toolbox dispatcher.",
+  "description": "The embedded main window uses the semantic dispatcher; native drag regions may only drag or toggle maximize.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-toolbox-dispatch"]
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-toolbox-dispatch", "core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize"]
 }

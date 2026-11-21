@@ -15,6 +15,7 @@ const source = option('snapshot');
 const listeners = new Set();
 const requests = [];
 let nextOperation = 0;
+let windowState = {maximized: false, active: true};
 
 function fixtureTool(id, name, category, installedVersion, latestVersion, description) {
   return {id, name, category, description, projectUrl: 'https://example.invalid/test-only', iconUrl: null, needAdmin: false, installed: Boolean(installedVersion), installedVersion, latestVersion, hasUpdate: Boolean(installedVersion && installedVersion !== latestVersion), entryState: installedVersion ? 'ready' : 'notInstalled', disabledReason: null, actions: installedVersion ? ['launch', 'update', 'reinstall', 'switchVersion', 'uninstall', 'openFolder', 'copyProjectUrl'] : ['install', 'copyProjectUrl'], availableVersions: [...new Set([latestVersion, installedVersion, '0.9.0'].filter(Boolean))].map(version => ({version, date: '2026-11-21', channel: 'stable', sizeBytes: 16777216, compatible: true, blocked: false, canInstall: true, disabledReason: null, changelog: ['浏览器合同样本，仅用于界面验收。']}))};
@@ -42,6 +43,7 @@ if (scenario === 'blocked' && snapshot.catalog.tools[0]) {
 }
 
 function emit(event, data) {
+  if (event === 'window.changed') windowState = {...windowState, ...data};
   const fields = {'catalog.changed': 'catalog', 'settings.changed': 'settings', 'preferences.changed': 'preferences', 'toolbox.changed': 'toolbox'};
   if (fields[event]) snapshot[fields[event]] = data;
   if (event === 'operation.changed') {const index = snapshot.operations.findIndex(item => item.id === data.id); if (index === -1) snapshot.operations.push(data); else snapshot.operations[index] = {...snapshot.operations[index], ...data};}
@@ -77,7 +79,17 @@ async function dispatch(request) {
     case 'operation.list': result = snapshot.operations; break;
     case 'operation.cancel': {const operation = snapshot.operations.find(item => item.id === params.operationId); emit('operation.changed', {...operation, state: 'cancelled', canCancel: false}); break;}
     case 'operation.retry': {const operation = snapshot.operations.find(item => item.id === params.operationId); emit('operation.changed', {...operation, state: 'running', canCancel: true, error: null}); result = {operationId: operation.id}; break;}
-    case 'window.requestClose': if (snapshot.operations.some(item => ['queued', 'running'].includes(item.state)) && !params.cancelTasks) return {v: 1, id: request.id, ok: false, error: {code: 'BUSY', message: '测试场景：有任务正在进行。', retryable: true}}; break;
+    case 'window.state': result = {accepted: true, ...windowState}; break;
+    case 'window.minimize':
+      emit('window.changed', {...windowState, active: false}); result = {accepted: true, ...windowState}; break;
+    case 'window.toggleMaximize':
+      emit('window.changed', {...windowState, maximized: !windowState.maximized}); result = {accepted: true, ...windowState}; break;
+    case 'window.requestClose': {
+      const active = snapshot.operations.filter(item => ['queued', 'running'].includes(item.state));
+      if (active.length && (!params.cancelTasks || active.some(item => !item.canCancel))) return {v: 1, id: request.id, ok: false, error: {code: 'BUSY', message: '测试场景：有任务正在进行。', retryable: true}};
+      for (const operation of active) emit('operation.changed', {...operation, state: 'cancelled', canCancel: false});
+      result = {accepted: true, ...windowState}; break;
+    }
     case 'toolbox.downloadUpdate': {const operation = {id: `fixture-op-${++nextOperation}`, kind: 'toolboxUpdate', toolId: null, version: params.version, state: 'running', stage: 'download', doneBytes: 0, totalBytes: null, canCancel: true, error: null, children: []}; emit('operation.changed', operation); result = {operationId: operation.id}; break;}
   }
   return {v: 1, id: request.id, ok: true, result};

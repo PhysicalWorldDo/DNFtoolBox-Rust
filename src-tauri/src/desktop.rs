@@ -239,6 +239,13 @@ impl HostState {
         if method == "app.bootstrap" {
             return Response::success(request.id, self.snapshot());
         }
+        if method == "window.state" {
+            // A state read must stay live and must not wait behind an update handoff.
+            return match self.window_action(method, &request.params, window.as_ref()) {
+                Ok(result) => Response::success(request.id, result),
+                Err(error) => Response::failure(request.id, error),
+            };
+        }
         if method == "app.ready" {
             let response = self.service.dispatch(request).await;
             if response.ok
@@ -383,6 +390,7 @@ impl HostState {
         let window = window.ok_or_else(|| CoreError::new("NO_WINDOW", "此操作需要桌面窗口。"))?;
         let native_error = |error: tauri::Error| CoreError::new("NATIVE_ACTION", error.to_string());
         match method {
+            "window.state" => {}
             "window.minimize" => {
                 window.minimize().map_err(native_error)?;
             }
@@ -420,7 +428,9 @@ impl HostState {
             }
             _ => return Err(CoreError::invalid("未知窗口操作。")),
         }
-        Ok(json!({"accepted":true,"maximized":window.is_maximized().unwrap_or(false)}))
+        Ok(
+            json!({"accepted":true,"maximized":window.is_maximized().unwrap_or(false),"active":window.is_focused().unwrap_or(false)}),
+        )
     }
     fn start_download(self: &Arc<Self>, params: &Value) -> Result<Value, CoreError> {
         let snapshot = self.service.bootstrap();
@@ -910,7 +920,8 @@ pub fn run() -> Result<(), String> {
                     api.prevent_close();
                     state.service.emit("window.changed", json!({"closeRequested":true,"busy":true,"canCancel":true}));
                 }
-                tauri::WindowEvent::Resized(_) => state.service.emit("window.changed", json!({"maximized":window.is_maximized().unwrap_or(false)})),
+                tauri::WindowEvent::Resized(_) => state.service.emit("window.changed", json!({"maximized":window.is_maximized().unwrap_or(false),"active":window.is_focused().unwrap_or(false)})),
+                tauri::WindowEvent::Focused(active) => state.service.emit("window.changed", json!({"maximized":window.is_maximized().unwrap_or(false),"active":active})),
                 _ => {}
             }
         })
@@ -992,6 +1003,53 @@ fn headless(arguments: Arguments, workspace: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_chrome_keeps_native_resize_and_shadow_without_a_caption() {
+        let config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let window = &config.app.windows[0];
+        assert!(
+            !window.decorations,
+            "the frontend owns the embedded title area"
+        );
+        assert!(window.resizable && window.shadow);
+        assert!(window.minimizable && window.maximizable && window.closable);
+    }
+    #[test]
+    fn embedded_drag_permissions_do_not_bypass_the_guarded_close_command() {
+        let capability: Value =
+            serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
+        let window_permissions: Vec<_> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|permission| permission.starts_with("core:window:"))
+            .collect();
+        assert_eq!(
+            window_permissions,
+            [
+                "core:window:allow-start-dragging",
+                "core:window:allow-internal-toggle-maximize"
+            ]
+        );
+    }
+    #[tokio::test]
+    async fn window_state_requires_a_desktop_window() {
+        let host = empty_host();
+        let response = host
+            .dispatch(
+                Request {
+                    v: 1,
+                    id: "headless-window-state".into(),
+                    method: "window.state".into(),
+                    params: json!({}),
+                },
+                None,
+            )
+            .await;
+        assert_eq!(response.error.unwrap().code, "NO_WINDOW");
+    }
     fn empty_host() -> Arc<HostState> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../.work/host-tests")

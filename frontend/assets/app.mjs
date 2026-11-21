@@ -10,7 +10,8 @@ const paths = {
   download: 'M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4', settings: 'm9 3 1-1h4l1 3 2 1 3-.3 2 3-2 2v2l2 2-2 3-3-.3-2 1-1 3h-4l-1-3-2-1-3 .3-2-3 2-2v-2l-2-2 2-3 3 .3 2-1z M15.3 12a3.3 3.3 0 1 1-6.6 0 3.3 3.3 0 0 1 6.6 0z',
   info: 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z M12 11v6m0-10v.3', search: 'M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0z M16 16l5 5',
   right: 'm9 5 7 7-7 7', open: 'M7 17 18 6M8 6h10v10', close: 'm6 6 12 12M18 6 6 18', more: 'M5 12h.3M12 12h.3m6.7 0h.3', play: 'm8 4 12 8-12 8z',
-  pin: 'm14 3 7 7-4 1.5-3 5.5-2-2-7 6 5-8-2-2 5-3z', box: 'm3 7 9-5 9 5v10l-9 5-9-5z M3 7l9 5 9-5m-9 5v10'
+  pin: 'm14 3 7 7-4 1.5-3 5.5-2-2-7 6 5-8-2-2 5-3z', box: 'm3 7 9-5 9 5v10l-9 5-9-5z M3 7l9 5 9-5m-9 5v10',
+  minimize: 'M5 12h14', maximize: 'M5 5h14v14H5z', restore: 'M8 8h11v11H8z M5 15V5h10'
 };
 const ui = {page: pageFromHash(), tab: 'updates', query: '', category: '全部', filter: 'all', selectedId: null, loading: true, checking: false, error: null, modal: null, toastTimer: null, returnFocus: null, settingsDraft: null, settingsBaseRevision: null, settingsDirty: false, settingsMessage: '', dismissedWarning: false, pending: new Set()};
 const $ = id => document.getElementById(id);
@@ -70,6 +71,8 @@ function checkedAt() {
 }
 
 function syncChrome() {
+  $('app-shell').dataset.view = ui.page;
+  syncWindowChrome();
   const nav = key => {
     const [label, glyph, title] = pages[key];
     return `<button class="nav-btn" data-page="${key}" title="${title}" aria-label="${title}" ${ui.page === key ? 'aria-current="page"' : ''}>${icon(glyph, 21)}${key === 'updates' && updates().length ? `<span class="nav-badge" aria-hidden="true">${updates().length}</span>` : ''}<span>${label}</span></button>`;
@@ -83,6 +86,16 @@ function syncChrome() {
   $('surface').setAttribute('aria-label', pages[ui.page][2]);
   document.title = `物理世界的工具箱 · ${pages[ui.page][2]}`;
   renderNotice();
+}
+
+function syncWindowChrome() {
+  const maximized = state.window.maximized === true;
+  const label = maximized ? '还原窗口' : '最大化窗口';
+  $('window-maximize').setAttribute('aria-label', label);
+  $('window-maximize').setAttribute('title', label);
+  $('window-maximize').innerHTML = icon(maximized ? 'restore' : 'maximize', 14);
+  $('app-shell').dataset.windowActive = String(state.window.active !== false);
+  $('app-shell').dataset.maximized = String(maximized);
 }
 
 function renderNotice() {
@@ -396,6 +409,7 @@ async function run(key, action) {
 let refreshPromise = null;
 let eventBuffer = [];
 let unsubscribe = null;
+let windowNotification = 0;
 let readySession = null;
 let catalogCheckSession = null;
 function checkUpdatesOnEntry() {
@@ -439,8 +453,13 @@ function handleEvent(message) {
   const result = applyEvent(state, message);
   if (result.resync) {refreshSnapshot().catch(connectionError); return;}
   if (result.ignored) return;
+  if (result.changed === 'window.changed') {
+    windowNotification++;
+    syncWindowChrome();
+    if (message.data.closeRequested) openModal('busy-close');
+    return;
+  }
   if (result.changed === 'settings.changed' && !ui.settingsDirty) resetSettingsDraft();
-  if (result.changed === 'window.changed' && message.data.closeRequested) openModal('busy-close');
   queueRender();
   if (result.terminal) refreshSnapshot().catch(connectionError);
 }
@@ -458,6 +477,10 @@ async function connect() {
   try {
     if (!unsubscribe) unsubscribe = await bridge.listen(handleEvent);
     await refreshSnapshot();
+    const notification = windowNotification;
+    const windowState = await bridge.dispatch('window.state');
+    if (notification === windowNotification) Object.assign(state.window, windowState);
+    syncWindowChrome();
   } catch (error) {connectionError(error);}
 }
 
@@ -556,7 +579,12 @@ async function saveSettings(form) {
 }
 
 async function nativeWindow(action, cancelTasks = false) {
-  try {await bridge.dispatch(`window.${action}`, cancelTasks ? {cancelTasks: true} : {});}
+  try {
+    const result = await bridge.dispatch(`window.${action}`, cancelTasks ? {cancelTasks: true} : {});
+    if (typeof result?.maximized === 'boolean') state.window.maximized = result.maximized;
+    if (typeof result?.active === 'boolean') state.window.active = result.active;
+    syncWindowChrome();
+  }
   catch (error) {
     if (action === 'requestClose' && error.code === 'BUSY') openModal('busy-close');
     else showError(error);
@@ -618,6 +646,8 @@ async function handleAction(element) {
 }
 
 $('global-search').innerHTML = `${icon('search', 16)}<span>搜索工具</span><kbd>Ctrl K</kbd>`;
+$('window-minimize').innerHTML = icon('minimize', 14);
+$('window-close').innerHTML = icon('close', 17);
 $('dialog-close').innerHTML = icon('close', 18);
 $('dialog-close').addEventListener('click', closeModal);
 $('dialog').addEventListener('cancel', () => {ui.modal = null;});
@@ -632,8 +662,9 @@ $('dialog').addEventListener('click', event => {
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeModal();
 });
 document.addEventListener('click', event => {
-  const element = event.target.closest('[data-page],[data-act],[data-category],[data-tab]');
+  const element = event.target.closest('[data-page],[data-act],[data-category],[data-tab],[data-window]');
   if (!element || element.disabled) return;
+  if (element.hasAttribute('data-window')) {nativeWindow(element.dataset.window); return;}
   if (element.hasAttribute('data-page')) {go(element.dataset.page); return;}
   if (element.hasAttribute('data-category')) {ui.category = element.dataset.category; render(); return;}
   if (element.hasAttribute('data-tab')) {ui.tab = element.dataset.tab; render(); return;}
