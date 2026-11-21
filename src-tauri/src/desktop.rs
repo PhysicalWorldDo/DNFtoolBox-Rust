@@ -200,17 +200,15 @@ impl HostState {
         }
     }
     fn change_download(&self, id: &str, patch: Value) {
-        let value = {
-            let mut tasks = self.downloads.lock().unwrap();
-            let Some(task) = tasks.get_mut(id) else {
-                return;
-            };
-            for (key, value) in patch.as_object().unwrap() {
-                task.snapshot[key] = value.clone();
-            }
-            task.snapshot.clone()
+        let mut tasks = self.downloads.lock().unwrap();
+        let Some(task) = tasks.get_mut(id) else {
+            return;
         };
-        self.service.emit("operation.changed", value);
+        for (key, value) in patch.as_object().unwrap() {
+            task.snapshot[key] = value.clone();
+        }
+        self.service
+            .emit("operation.changed", task.snapshot.clone());
     }
     async fn dispatch(
         self: &Arc<Self>,
@@ -237,6 +235,7 @@ impl HostState {
             method,
             "operation.start"
                 | "operation.retry"
+                | "operation.delete"
                 | "settings.update"
                 | "preferences.setPinned"
                 | "preferences.selectTool"
@@ -317,7 +316,7 @@ impl HostState {
                 }
                 return Response::failure(
                     request.id,
-                    CoreError::new("BUSY", "任务已完成或正在准备安全交接。"),
+                    CoreError::new("BUSY", "下载已结束，或正在准备替换本地主程序。"),
                 );
             }
         }
@@ -330,7 +329,14 @@ impl HostState {
         } else {
             None
         };
+        let delete_download = method == "operation.delete"
+            && self
+                .downloads
+                .lock()
+                .unwrap()
+                .contains_key(request.params["operationId"].as_str().unwrap_or_default());
         let host_method = retry_version.is_some()
+            || delete_download
             || matches!(
                 method,
                 "toolbox.downloadUpdate"
@@ -374,6 +380,7 @@ impl HostState {
         let result = match method {
             "toolbox.downloadUpdate" => self.start_download(&request.params),
             "operation.retry" => self.start_download(&json!({"version":retry_version.unwrap()})),
+            "operation.delete" => self.delete_download_record(&request.params),
             "toolbox.applyUpdate" => self.apply_update(&request.params, window.as_ref()).await,
             "window.minimize"
             | "window.toggleMaximize"
@@ -402,6 +409,26 @@ impl HostState {
                 .insert(request.id, (fingerprint, response.clone()));
         }
         response
+    }
+    fn delete_download_record(&self, params: &Value) -> Result<Value, CoreError> {
+        if params["confirmed"] != true {
+            return Err(CoreError::invalid("删除任务记录需要确认"));
+        }
+        let id = params["operationId"].as_str().unwrap_or_default();
+        let mut tasks = self.downloads.lock().unwrap();
+        let task = tasks
+            .get(id)
+            .ok_or_else(|| CoreError::invalid("任务记录不存在"))?;
+        if !matches!(
+            task.snapshot["state"].as_str(),
+            Some("succeeded" | "failed" | "cancelled")
+        ) || task.snapshot["result"]["readyToApply"] == true
+        {
+            return Err(CoreError::new("BUSY", "请先完成本体下载或应用已下载的更新"));
+        }
+        tasks.remove(id);
+        self.service.emit("operation.removed", json!({"id":id}));
+        Ok(json!({"accepted":true}))
     }
     fn resolve_action(&self, method: &str, params: &Value) -> Result<NativeAction, CoreError> {
         if method == "system.openLink" {
@@ -1075,6 +1102,41 @@ mod tests {
             .join(format!("handoff-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         HostState::new(Service::open(&root, VERSION).unwrap(), None, false)
+    }
+    #[tokio::test]
+    async fn a_download_record_can_be_deleted_after_failure_but_not_while_pending() {
+        let host = empty_host();
+        for (id, state, ready) in [
+            ("update-running", "running", false),
+            ("update-ready", "succeeded", true),
+            ("update-failed", "failed", false),
+        ] {
+            host.downloads.lock().unwrap().insert(
+                id.into(),
+                DownloadTask {
+                    snapshot: json!({"id":id,"state":state,"result":{"readyToApply":ready}}),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        }
+        let delete = |id, confirmed| Request {
+            v: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            method: "operation.delete".into(),
+            params: json!({"operationId":id,"confirmed":confirmed}),
+        };
+        assert!(!host.dispatch(delete("update-failed", false), None).await.ok);
+        assert!(!host.dispatch(delete("update-running", true), None).await.ok);
+        assert!(!host.dispatch(delete("update-ready", true), None).await.ok);
+        let mut events = host.service.subscribe();
+        assert!(host.dispatch(delete("update-failed", true), None).await.ok);
+        let event = events.try_recv().unwrap();
+        assert_eq!(event.event, "operation.removed");
+        assert_eq!(event.data["id"], "update-failed");
+        let downloads = host.downloads.lock().unwrap();
+        assert_eq!(downloads.len(), 2);
+        assert!(downloads.contains_key("update-ready"));
+        assert!(!downloads.contains_key("update-failed"));
     }
     #[tokio::test]
     async fn a_slow_handoff_freezes_writes_without_allowing_the_monitor_to_exit() {

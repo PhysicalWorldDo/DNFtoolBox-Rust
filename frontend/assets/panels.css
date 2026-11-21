@@ -32,6 +32,7 @@
     .pz-section{margin:28px 0}.pz-section h2{margin:0 0 12px;font-size:20px;line-height:1.4}
     .pz-section>.pz-actions,.pz-section>p+a{margin-top:14px}
     .pz-form,.pz-split{padding:18px 22px}.pz-split{justify-content:space-between}
+    .pz-toolbox-update{margin-bottom:22px}
     .pz-form{display:grid;gap:18px}.pz-check{display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer}
     .pz-check input{width:19px;height:19px;accent-color:var(--accent,#f6d675);cursor:pointer}
     .pz-field{display:block;font-size:13px;font-weight:650}.pz-field small{font-weight:400}
@@ -48,3 +49,4 @@
     .pz-page summary{cursor:pointer}.pz-row .pz-btn{min-width:66px}
     @media(max-width:780px){.pz-page .pz-head{align-items:flex-start;flex-direction:column;gap:12px}.pz-head h1{font-size:30px}.pz-tabs{gap:16px}.pz-release{min-width:auto}.pz-section{margin:22px 0}}
     @media(max-width:580px){.pz-row,.pz-job{padding:11px 9px}.pz-row,.pz-jobline,.pz-split{gap:8px}.pz-row .pz-release{display:none}.pz-tabs{gap:11px}.pz-tabs button,.pz-btn{font-size:12px}.pz-btn{padding:7px 9px}.pz-form,.pz-split{padding:14px}.pz-split{flex-wrap:wrap}}
+    @media(max-width:580px){.self-update>.pz-grow{flex-basis:100%}.pz-jobline{flex-wrap:wrap}.pz-jobline>.pz-actions{flex-basis:100%;justify-content:flex-end}}

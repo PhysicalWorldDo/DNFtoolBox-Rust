@@ -184,31 +184,52 @@ function updateLibraryResults() {
   $('library-list').innerHTML = result.html;
 }
 
-const stageNames = {queued: '排队中', prepare: '准备安装', preflight: '检查安装条件', download: '下载', verify: '校验安装包', extract: '解压安装包', buildCandidate: '准备文件', candidate: '准备文件', commit: '提交文件', write: '写入安装目录', record: '保存安装记录', cleanup: '清理临时文件', rollback: '恢复旧文件', recover: '恢复安装', uninstall: '卸载', complete: '已完成', done: '已完成', selfUpdate: '本体更新'};
+const stageNames = {queued: '排队中', prepare: '准备安装', preflight: '检查安装条件', download: '下载', verify: '校验安装包', extract: '解压安装包', buildCandidate: '准备文件', candidate: '准备文件', commit: '写入本地文件', write: '写入安装目录', record: '保存安装记录', cleanup: '清理临时文件', rollback: '恢复旧文件', recover: '恢复安装', uninstall: '卸载', complete: '已完成', done: '已完成', selfUpdate: '本体更新'};
 const kindNames = {install: '安装', update: '更新', reinstall: '重装', switchVersion: '切换版本', uninstall: '卸载', updateAll: '批量更新', toolboxUpdate: '工具箱更新', selfUpdate: '工具箱更新', downloadUpdate: '下载工具箱更新'};
 const stateNames = {queued: '排队中', running: '处理中', succeeded: '已完成', failed: '失败', cancelled: '已取消', recoveryRequired: '需要恢复'};
+const catalogRefreshKinds = ['refresh', 'catalogRefresh', 'catalog.refresh'];
+
+function operationName(operation) {
+  if (catalogRefreshKinds.includes(operation.kind)) return '工具目录刷新';
+  if (operation.kind === 'updateAll') return '批量更新';
+  return findTool(operation.toolId)?.name || operation.toolId || '工具箱本体';
+}
+
+function removableRecord(operation) {
+  return ['succeeded', 'failed', 'cancelled'].includes(operation.state)
+    && !preparedUpdate(operation)
+    && !operation.children?.some(child => child.state === 'recoveryRequired');
+}
+
+function operationStatus(operation) {
+  if (preparedUpdate(operation)) return '等待确认更新';
+  if (operation.kind === 'updateAll' && operation.result?.status === 'partial') return '部分完成';
+  return stateNames[operation.state] || operation.state;
+}
 
 function operationRow(operation) {
   const tool = findTool(operation.toolId);
   const batch = operation.kind === 'updateAll';
   const partial = batch && operation.result?.status === 'partial';
-  const name = batch ? '批量更新' : tool?.name || (operation.toolId ? operation.toolId : '工具箱本体');
+  const name = operationName(operation);
+  const kind = catalogRefreshKinds.includes(operation.kind) ? '' : kindNames[operation.kind] || operation.kind;
   const active = isActive(operation);
-  const status = partial ? '部分完成' : stateNames[operation.state] || operation.state;
+  const status = operationStatus(operation);
   const total = Number(operation.totalBytes);
   const done = Number(operation.doneBytes || 0);
   const percent = total > 0 ? Math.max(0, Math.min(100, Math.floor(done / total * 100))) : null;
   const progress = active ? `<progress ${percent == null ? '' : `value="${percent}" max="100"`} aria-label="${esc(name)}任务进度"></progress>` : '';
   let controls = '';
-  if (active) controls += button(operation.canCancel ? '取消' : '正在提交', 'cancel-task', {id: operation.id, disabled: !operation.canCancel || ui.pending.has(`task:${operation.id}`)});
+  if (active && operation.canCancel) controls += button('取消', 'cancel-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   const failedItems = batch && !active && operation.children?.some(child => ['failed', 'cancelled'].includes(child.state));
   if (failedItems) controls += button('重试失败项', 'retry-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   else if (['failed', 'cancelled', 'recoveryRequired'].includes(operation.state) && operation.error?.retryable !== false) controls += button('重试', 'retry-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   controls += button('日志', 'open-log', {id: operation.id});
+  if (removableRecord(operation)) controls += button('删除记录', 'delete-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   if (preparedUpdate(operation)) controls = button('应用更新并重启', 'apply-self', {id: operation.id}) + controls;
-  const stage = active ? stageNames[operation.stage] || operation.stage || stateNames[operation.state] : status;
-  const note = operation.error?.message || (partial ? operation.result?.message || '部分工具未完成，请查看各项结果。' : active && !operation.canCancel ? '正在提交或恢复文件，请等待任务完成。' : operation.state === 'succeeded' ? operation.result?.message || '' : '');
-  return `<article class="pz-job" data-operation-id="${esc(operation.id)}"><div class="pz-jobline">${tool ? tile(tool, 'small') : icon('download', 28)}<div class="pz-grow"><strong>${esc(name)}</strong><div class="pz-meta"><span>${esc(kindNames[operation.kind] || operation.kind)}</span>${operation.version ? `<span>${esc(version(operation.version))}</span>` : ''}<span>${esc(stage)}</span></div></div><small>${active ? `${percent == null ? bytes(done) : `${percent}%`}${total > 0 ? ` · ${bytes(total)}` : ''}` : esc(status)}</small><div class="pz-actions">${controls}</div></div>${progress}${note ? `<p class="pz-jobnote ${operation.error ? 'error' : ''}">${esc(note)}</p>` : ''}${operation.children?.length ? `<div class="pz-jobnote">${operation.children.map(child => `<div>${esc(child.toolId || child.name || child.id || '')} · ${esc(stateNames[child.state] || child.state || '')}${child.error?.message ? ` · ${esc(child.error.message)}` : ''}</div>`).join('')}</div>` : ''}</article>`;
+  const stage = active ? stageNames[operation.stage] || operation.stage || status : '';
+  const note = operation.error?.message || (partial ? operation.result?.message || '部分工具未完成，请查看各项结果。' : active && !operation.canCancel ? '正在写入或恢复本地文件，请等待任务完成。' : operation.state === 'succeeded' ? operation.result?.message || '' : '');
+  return `<article class="pz-job" data-operation-id="${esc(operation.id)}"><div class="pz-jobline">${tool ? tile(tool, 'small') : icon('download', 28)}<div class="pz-grow"><strong>${esc(name)}</strong><div class="pz-meta">${kind ? `<span>${esc(kind)}</span>` : ''}${operation.version ? `<span>${esc(version(operation.version))}</span>` : ''}${stage ? `<span>${esc(stage)}</span>` : ''}</div></div><small>${active ? `${percent == null ? bytes(done) : `${percent}%`}${total > 0 ? ` · ${bytes(total)}` : ''}` : esc(status)}</small><div class="pz-actions">${controls}</div></div>${progress}${note ? `<p class="pz-jobnote ${operation.error ? 'error' : ''}">${esc(note)}</p>` : ''}${operation.children?.length ? `<div class="pz-jobnote">${operation.children.map(child => `<div>${esc(child.toolId || child.name || child.id || '')} · ${esc(stateNames[child.state] || child.state || '')}${child.error?.message ? ` · ${esc(child.error.message)}` : ''}</div>`).join('')}</div>` : ''}</article>`;
 }
 
 function catalogRow(tool) {
@@ -221,16 +242,23 @@ function renderUpdates() {
   const fresh = updates();
   const uninstalled = tools().filter(tool => !tool.installed);
   const eligible = fresh.filter(tool => allows(tool, 'update'));
-  const tabs = [['updates', '可更新', fresh.length], ['available', '待安装', uninstalled.length], ['tasks', '任务记录', state.operations.length]];
+  const tabs = [['updates', '可更新工具', fresh.length], ['available', '待安装工具', uninstalled.length], ['tasks', '任务记录', state.operations.length]];
   let body;
   if (ui.tab === 'tasks') {
     const list = [...state.operations.filter(isActive), ...state.operations.filter(item => !isActive(item)).reverse()];
-    body = list.length ? `<div class="pz-list" id="operation-list">${list.map(operationRow).join('')}</div>` : empty('还没有安装任务', '从工具详情、可更新或待安装列表开始安装。');
+    body = list.length ? `<div class="pz-list" id="operation-list">${list.map(operationRow).join('')}</div>` : empty('暂无任务记录', '工具目录刷新、下载和安装任务会显示在这里。');
   } else {
     const list = ui.tab === 'updates' ? fresh : uninstalled;
-    body = list.length ? `<div class="pz-list">${list.map(catalogRow).join('')}</div>` : empty(ui.tab === 'updates' ? '当前没有可更新的工具' : '当前目录中的工具均已安装', state.catalog.source === 'empty' ? '检查工具目录后可查看新版本。' : '检查更新可以核对最新发布信息。');
+    body = list.length ? `<div class="pz-list">${list.map(catalogRow).join('')}</div>` : empty(ui.tab === 'updates' ? '当前没有可更新的工具' : '当前目录中的工具均已安装', state.catalog.source === 'empty' ? '检查工具目录后可查看新版本。' : '点击「检查工具更新」获取最新发布信息。');
   }
-  return `<section class="page-wrap pz-page">${heading('安装与更新', '检查版本、管理安装包，跟踪每个工具的处理进度。', selfCheckButton() + button(ui.checking ? '检查中…' : '检查工具更新', 'refresh', {disabled: ui.checking}) + button('全部更新', 'batch', {className: 'primary', disabled: !eligible.length || Boolean(activeTask()) || ui.checking}))}<nav class="pz-tabs" aria-label="安装状态">${tabs.map(([key, name, count]) => `<button type="button" data-tab="${key}" aria-pressed="${ui.tab === key}">${name} <span>${count}</span></button>`).join('')}</nav><div class="pz-source"><span class="pz-dot"></span>${esc(ui.checking ? '正在检查工具目录…' : freshness())}${checkedAt() ? ` · 上次检查 ${esc(checkedAt())}` : ''}</div>${body}</section>`;
+  const toolActions = button(ui.checking ? '正在检查工具…' : '检查工具更新', 'refresh', {disabled: ui.checking}) +
+    button('全部更新工具', 'batch', {className: 'primary', disabled: !eligible.length || Boolean(activeTask()) || ui.checking});
+  return `<section class="page-wrap pz-page">
+    ${heading('安装与更新', '检查本体版本、安装工具并查看任务记录。', toolActions)}
+    <section class="pz-toolbox-update" aria-label="工具箱本体更新">${selfUpdateBody()}</section>
+    <nav class="pz-tabs" aria-label="工具与任务">${tabs.map(([key, name, count]) => `<button type="button" data-tab="${key}" aria-pressed="${ui.tab === key}">${name} <span>${count}</span></button>`).join('')}</nav>
+    <div class="pz-source"><span class="pz-dot"></span>${esc(ui.checking ? '正在检查工具目录…' : freshness())}${checkedAt() ? ` · 工具目录上次检查 ${esc(checkedAt())}` : ''}</div>${body}
+  </section>`;
 }
 
 function resetSettingsDraft() {
@@ -261,17 +289,22 @@ function selfUpdateBody() {
   const toolbox = state.toolbox;
   const available = Boolean(toolbox.hasUpdate);
   const staged = state.operations.find(operation => preparedUpdate(operation) && (!toolbox.checked || operation.version === toolbox.latestVersion));
-  const downloading = state.operations.some(operation => operation.kind === 'toolboxUpdate' && isActive(operation));
+  const downloading = state.operations.find(operation => operation.kind === 'toolboxUpdate' && isActive(operation));
   let action = selfCheckButton();
-  let status = toolbox.checked ? 'GitHub 上暂无更新的正式版。' : '从 GitHub Releases 检查本体版本。';
+  let status = toolbox.checked ? '暂无更新的正式版。' : '从 GitHub 检查本体版本。';
   if (available) status = `发现新版 ${version(toolbox.latestVersion)}${toolbox.sizeBytes != null ? ` · ${bytes(toolbox.sizeBytes)}` : ''}`;
   if (staged) {
-    status = `${version(staged.version)} 已校验，可应用更新。`;
+    status = `${version(staged.version)} 已下载并校验，等待确认。`;
     action += button('应用更新并重启', 'apply-self', {id: staged.id, className: 'primary'});
-  } else if (downloading) action += button('查看下载任务', 'show-tasks');
-  else if (available && toolbox.canDownload) action += button(`下载 ${version(toolbox.latestVersion)}`, 'download-self', {className: 'primary', disabled: ui.pending.has('self-download')});
+  } else if (downloading) {
+    status = `${downloading.stage === 'verify' ? '正在校验' : '正在下载'} ${version(downloading.version)}。`;
+    action += button('查看下载任务', 'show-tasks');
+  } else if (available && toolbox.canDownload) {
+    action += button(`下载 ${version(toolbox.latestVersion)}`, 'download-self', {className: 'primary', disabled: ui.pending.has('self-download')});
+  }
   if (toolbox.releaseUrl) action += button('查看发布页', 'link', {id: 'release'});
-  return `<div class="pz-split self-update"><div class="pz-grow"><b>物理世界的工具箱 ${esc(version(toolbox.version))}</b><p>${esc(status)}</p>${available && !toolbox.canDownload ? '<p>可从 GitHub 发布页手动下载。</p>' : ''}</div><div class="pz-actions">${action}</div></div>`;
+  if (ui.pending.has('self-check')) status = '正在查询 GitHub 上的本体版本…';
+  return `<div class="pz-split self-update"><div class="pz-grow"><b>工具箱本体 ${esc(version(toolbox.version))}</b><p role="status">${esc(status)}</p>${available && !toolbox.canDownload && !staged ? '<p>可从 GitHub 发布页手动下载。</p>' : ''}</div><div class="pz-actions">${action}</div></div>`;
 }
 
 function renderAbout() {
@@ -447,6 +480,21 @@ function renderModal() {
     title = '应用工具箱更新';
     const staged = state.operations.find(operation => operation.id === modal.id && preparedUpdate(operation));
     body = staged ? `<p>更新到 ${esc(version(staged.version))} 时，工具箱将备份并替换主程序，再自动重启。已安装工具、配置和个人文件会保留。</p>${activeTask() ? '<p class="native-close-note">请等待当前安装任务完成后再应用更新。</p>' : ''}<div class="pz-actions">${button('稍后', 'close')}${button('应用更新并重启', 'confirm-apply-self', {id: modal.id, className: 'primary', disabled: Boolean(activeTask()) || ui.pending.has('self-apply')})}</div>` : '<p>此更新任务已失效。请重新检查本体更新。</p>';
+  } else if (modal.type === 'task-log') {
+    title = '任务日志';
+    const operation = state.operations.find(item => item.id === modal.id);
+    if (operation) {
+      const status = operationStatus(operation);
+      const detail = operation.error?.message || operation.result?.message;
+      const children = (operation.children || []).map(child => [child.toolId || child.name, stateNames[child.state], child.error?.message].filter(Boolean).join(' · '));
+      body = `<p><b>${esc(operationName(operation))}</b></p><div class="pz-meta"><span>${esc(status)}</span>${operation.version ? `<span>${esc(version(operation.version))}</span>` : ''}</div>${detail ? `<p>${esc(detail)}</p>` : ''}${children.length ? notes(children) : ''}`;
+    } else body = '<p>该任务日志已移除。</p>';
+  } else if (modal.type === 'delete-task') {
+    title = '删除任务记录';
+    const operation = state.operations.find(item => item.id === modal.id);
+    body = operation && removableRecord(operation)
+      ? `<p>删除「${esc(operationName(operation))}」的任务记录和日志。</p><div class="pz-actions">${button('取消', 'close')}${button('删除记录', 'confirm-delete-task', {id: modal.id, className: 'pz-danger', disabled: ui.pending.has(`task:${modal.id}`)})}</div>`
+      : '<p>任务状态已变化，请返回任务列表。</p>';
   } else if (modal.type === 'sponsor') {
     const sponsor = state.about.sponsorQrs?.find(item => item.id === modal.id);
     const source = imageUrl(sponsor?.imageUrl);
@@ -455,7 +503,7 @@ function renderModal() {
   } else if (modal.type === 'busy-close') {
     title = '任务尚未完成';
     const cancellable = state.operations.filter(isActive).every(operation => operation.canCancel);
-    body = `<p>${cancellable ? '有安装或下载任务正在进行。取消任务后，工具箱会等待文件状态明确再退出。' : '正在提交或恢复文件，完成后才能安全退出工具箱。'}</p><div class="pz-actions">${button('继续等待', 'close')}${button('查看任务', 'show-tasks')}${cancellable ? button('取消任务并退出', 'cancel-close', {className: 'pz-danger', disabled: ui.pending.has('window-close')}) : ''}</div>`;
+    body = `<p>${cancellable ? '有安装或下载任务正在进行。取消任务后，工具箱会等待任务安全停止再退出。' : '正在写入或恢复本地文件，完成后即可退出。'}</p><div class="pz-actions">${button('继续等待', 'close')}${button('查看任务', 'show-tasks')}${cancellable ? button('取消任务并退出', 'cancel-close', {className: 'pz-danger', disabled: ui.pending.has('window-close')}) : ''}</div>`;
   } else if (modal.type === 'error') {
     title = '操作未完成';
     body = `<p>${esc(modal.error?.message || '请重试。')}</p><p class="error-code">${esc(modal.error?.code || '')}</p><div class="pz-actions">${modal.error?.operationId ? button('查看任务', 'show-tasks') + button('打开日志', 'open-log', {id: modal.error.operationId}) : ''}${modal.error?.outcomeUnknown ? button('重新载入状态', 'reconnect') : ''}${button('关闭', 'close')}</div>`;
@@ -495,7 +543,7 @@ let catalogCheckSession = null;
 function checkUpdatesOnEntry() {
   if (ui.loading || !state.sessionId || ui.page !== 'updates' || catalogCheckSession === state.sessionId) return;
   catalogCheckSession = state.sessionId;
-  const sessionCheck = state.operations.some(operation => ['refresh', 'catalogRefresh', 'catalog.refresh'].includes(operation.kind) && operation.request?.sessionId === state.sessionId);
+  const sessionCheck = state.operations.some(operation => catalogRefreshKinds.includes(operation.kind) && operation.request?.sessionId === state.sessionId);
   if (!ui.checking && !sessionCheck) refreshCatalog('updatesPage');
 }
 async function refreshSnapshot() {
@@ -643,7 +691,7 @@ async function taskAction(id, action) {
   return run(`task:${id}`, async () => {
     await bridge.dispatch(`operation.${action}`, {operationId: id});
     await refreshSnapshot();
-    toast(action === 'cancel' ? '已请求取消任务。' : '已重新提交任务。');
+    toast(action === 'cancel' ? '已请求取消任务。' : '任务已重新排队。');
   });
 }
 
@@ -709,17 +757,35 @@ async function handleAction(element) {
     case 'confirm-batch': return startOperation('updateAll');
     case 'cancel-task': return taskAction(id, 'cancel');
     case 'retry-task': return taskAction(id, 'retry');
-    case 'open-log': return run(`log:${id}`, () => bridge.dispatch('system.openLog', {operationId: id}));
+    case 'open-log': return openModal('task-log', {id});
+    case 'delete-task': return openModal('delete-task', {id});
+    case 'confirm-delete-task':
+      if (ui.modal?.type !== 'delete-task' || ui.modal.id !== id) return;
+      return run(`task:${id}`, async () => {
+        await bridge.dispatch('operation.delete', {operationId: id, confirmed: true});
+        closeModal();
+        await refreshSnapshot();
+        toast('任务记录已删除。');
+      });
     case 'open-folder': return run(`folder:${id}`, () => bridge.dispatch('tool.openFolder', {toolId: id}));
     case 'copy-project': return run(`copy:${id}`, async () => {await bridge.dispatch('tool.copyProjectUrl', {toolId: id}); toast('项目地址已复制。');});
     case 'workspace': return run('workspace', () => bridge.dispatch('system.openWorkspace'));
     case 'link': return run(`link:${id}`, () => bridge.dispatch('system.openLink', {target: id}));
     case 'sponsor': return openModal('sponsor', {id});
     case 'refresh': return refreshCatalog();
-    case 'self-check': return run('self-check', async () => {await bridge.dispatch('toolbox.checkUpdate'); await refreshSnapshot(); openModal('self');});
+    case 'self-check': {
+      const page = ui.page;
+      return run('self-check', async () => {
+        await bridge.dispatch('toolbox.checkUpdate');
+        await refreshSnapshot();
+        if (page !== 'updates' && ui.page === page) openModal('self');
+      });
+    }
     case 'download-self': return run('self-download', async () => {await bridge.dispatch('toolbox.downloadUpdate', {version: state.toolbox.latestVersion}); closeModal(); ui.tab = 'tasks'; go('updates'); await refreshSnapshot();});
     case 'apply-self': return openModal('apply-self', {id});
-    case 'confirm-apply-self': return run('self-apply', () => bridge.dispatch('toolbox.applyUpdate', {operationId: id, confirmed: true}));
+    case 'confirm-apply-self':
+      if (ui.modal?.type !== 'apply-self' || ui.modal.id !== id) return;
+      return run('self-apply', () => bridge.dispatch('toolbox.applyUpdate', {operationId: id, confirmed: true}));
     case 'show-tasks': ui.tab = 'tasks'; return go('updates');
     case 'settings-page': return go('settings');
     case 'reload-settings': resetSettingsDraft(); ui.settingsMessage = ''; return render();

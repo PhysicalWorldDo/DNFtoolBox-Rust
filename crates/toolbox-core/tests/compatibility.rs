@@ -186,8 +186,9 @@ fn about_keeps_the_eleven_legacy_release_notes() {
     let service = Service::open(dir.path(), "0.4.0").unwrap();
     let boot = service.bootstrap();
     let logs = boot["about"]["logs"].as_array().unwrap();
-    assert_eq!(logs.len(), 15);
-    assert_eq!(logs[0]["version"], "v0.4.3");
+    assert_eq!(logs.len(), 16);
+    assert_eq!(logs[0]["version"], "v0.4.4");
+    assert!(logs.iter().any(|log| log["version"] == "v0.4.3"));
     assert!(logs.iter().any(|log| log["version"] == "v0.4.2"));
     assert!(logs.iter().any(|log| log["version"] == "v0.4.1"));
     assert!(logs.iter().any(|log| log["version"] == "v0.3.0"));

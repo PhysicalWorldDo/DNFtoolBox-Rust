@@ -48,6 +48,7 @@ function emit(event, data) {
   const fields = {'catalog.changed': 'catalog', 'settings.changed': 'settings', 'preferences.changed': 'preferences', 'toolbox.changed': 'toolbox'};
   if (fields[event]) snapshot[fields[event]] = data;
   if (event === 'operation.changed') {const index = snapshot.operations.findIndex(item => item.id === data.id); if (index === -1) snapshot.operations.push(data); else snapshot.operations[index] = {...snapshot.operations[index], ...data};}
+  if (event === 'operation.removed') snapshot.operations = snapshot.operations.filter(item => item.id !== data.id);
   const message = {v: 1, sessionId: snapshot.sessionId, seq: ++snapshot.seq, event, data};
   for (const response of listeners) response.write(`data: ${JSON.stringify(message)}\n\n`);
   return message;
@@ -88,6 +89,12 @@ async function dispatch(request) {
     case 'operation.list': result = snapshot.operations; break;
     case 'operation.cancel': {const operation = snapshot.operations.find(item => item.id === params.operationId); emit('operation.changed', {...operation, state: 'cancelled', canCancel: false}); break;}
     case 'operation.retry': {const operation = snapshot.operations.find(item => item.id === params.operationId); emit('operation.changed', {...operation, state: 'running', canCancel: true, error: null}); result = {operationId: operation.id}; break;}
+    case 'operation.delete': {
+      const operation = snapshot.operations.find(item => item.id === params.operationId);
+      if (params.confirmed !== true || !['succeeded', 'failed', 'cancelled'].includes(operation?.state) || operation.result?.readyToApply) return {v: 1, id: request.id, ok: false, error: {code: 'BUSY', message: '请等待任务结束后再删除记录。', retryable: true}};
+      emit('operation.removed', {id: operation.id});
+      break;
+    }
     case 'window.state': result = {accepted: true, ...windowState}; break;
     case 'window.minimize':
       emit('window.changed', {...windowState, active: false}); result = {accepted: true, ...windowState}; break;

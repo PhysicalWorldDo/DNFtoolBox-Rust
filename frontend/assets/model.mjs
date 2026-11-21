@@ -38,6 +38,7 @@ export function applyEvent(state, message) {
     if (index === -1) state.operations.push(message.data);
     else state.operations[index] = {...state.operations[index], ...message.data};
   }
+  if (message.event === 'operation.removed') state.operations = state.operations.filter(operation => operation.id !== message.data.id);
   return {changed: message.event, terminal: message.event === 'operation.changed' && !isActive(message.data)};
 }
 

@@ -392,7 +392,7 @@ impl Service {
                     return Ok(json!({"accepted":false,"state":operation.state}));
                 }
                 if !operation.can_cancel {
-                    return Err(CoreError::new("BUSY", "文件正在提交或恢复，请等待完成"));
+                    return Err(CoreError::new("BUSY", "正在写入或恢复本地文件，请等待完成"));
                 }
                 if let Some(cancel) = state.cancellations.get(id) {
                     cancel.store(true, Ordering::Relaxed);
@@ -427,6 +427,7 @@ impl Service {
                 }
                 self.start_operation(&retry)
             }
+            "operation.delete" => self.delete_operation(params),
             "tool.launch" => {
                 self.launch(required(params, "toolId")?)?;
                 Ok(json!({"accepted":true}))
@@ -1036,6 +1037,81 @@ impl Service {
             }
         }
     }
+    fn delete_operation(&self, params: &Value) -> CoreResult<Value> {
+        if params["confirmed"] != true {
+            return Err(CoreError::invalid("删除任务记录需要确认"));
+        }
+        let id = required(params, "operationId")?;
+        let mut state = self.state.lock().unwrap();
+        let operation = state
+            .operations
+            .get(id)
+            .ok_or_else(|| CoreError::invalid("任务记录不存在"))?;
+        if state.cancellations.contains_key(id) || operation.active() {
+            return Err(CoreError::new("BUSY", "请等待任务结束后再删除记录"));
+        }
+        if state.catalog.recovery.contains("*") || !self.operation_record_removable(operation) {
+            return Err(CoreError::new(
+                "RECOVERY_REQUIRED",
+                "请完成本地文件恢复后再删除这条记录",
+            ));
+        }
+        self.remove_operation_record(id)?;
+        state.operations.remove(id);
+        self.emit_locked(&mut state, "operation.removed", json!({"id":id}));
+        Ok(json!({"accepted":true}))
+    }
+    fn operation_record_removable(&self, operation: &Operation) -> bool {
+        if !matches!(
+            operation.state.as_str(),
+            "succeeded" | "failed" | "cancelled"
+        ) || operation
+            .children
+            .iter()
+            .any(|child| child["state"] == "recoveryRequired")
+        {
+            return false;
+        }
+        let mut ids = std::iter::once(operation.id.as_str()).chain(
+            operation
+                .children
+                .iter()
+                .filter_map(|child| child["transactionId"].as_str()),
+        );
+        ids.all(|id| {
+            if validate_id(id).is_err() {
+                return false;
+            }
+            let Ok(path) = managed(
+                &self.workspace,
+                &format!("cache/operations/{id}/transaction.json"),
+            ) else {
+                return false;
+            };
+            !path.exists()
+                || read_json(&path).is_ok_and(|journal| {
+                    matches!(journal["phase"].as_str(), Some("committed" | "rolledBack"))
+                })
+        })
+    }
+    fn remove_operation_record(&self, id: &str) -> CoreResult<()> {
+        validate_id(id)?;
+        let path = managed(
+            &self.workspace,
+            &format!("cache/operations/{id}/operation.json"),
+        )?;
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        let record: Operation = serde_json::from_value(read_json(&path)?)?;
+        if record.id != id {
+            return Err(CoreError::invalid("保存的任务记录与所选任务不一致"));
+        }
+        fs::remove_file(path)?;
+        Ok(())
+    }
     fn prune_operations(&self) {
         if self.read_only.load(Ordering::Acquire) {
             return;
@@ -1045,40 +1121,16 @@ impl Service {
             if state.catalog.recovery.contains("*") {
                 return;
             }
-            state.operations.values().cloned().collect::<Vec<_>>()
+            state
+                .operations
+                .values()
+                .filter(|operation| !state.cancellations.contains_key(&operation.id))
+                .cloned()
+                .collect::<Vec<_>>()
         };
         let mut eligible: Vec<Operation> = operations
             .into_iter()
-            .filter(|operation| {
-                if !["succeeded", "failed", "cancelled"].contains(&operation.state.as_str())
-                    || operation
-                        .children
-                        .iter()
-                        .any(|child| child["state"] == "recoveryRequired")
-                {
-                    return false;
-                }
-                let ids = std::iter::once(operation.id.as_str()).chain(
-                    operation
-                        .children
-                        .iter()
-                        .filter_map(|child| child["transactionId"].as_str()),
-                );
-                !ids.into_iter().any(|id| {
-                    let Ok(path) = managed(
-                        &self.workspace,
-                        &format!("cache/operations/{id}/transaction.json"),
-                    ) else {
-                        return true;
-                    };
-                    if !path.exists() {
-                        return false;
-                    }
-                    read_json(&path).map_or(true, |journal| {
-                        !matches!(journal["phase"].as_str(), Some("committed" | "rolledBack"))
-                    })
-                })
-            })
+            .filter(|operation| self.operation_record_removable(operation))
             .collect();
         eligible.sort_by_key(|operation| {
             (
@@ -1090,22 +1142,16 @@ impl Service {
         });
         let remove = eligible.len().saturating_sub(50);
         for operation in eligible.into_iter().take(remove) {
-            let Ok(path) = managed(
-                &self.workspace,
-                &format!("cache/operations/{}/operation.json", operation.id),
-            ) else {
+            let mut state = self.state.lock().unwrap();
+            if !state.operations.contains_key(&operation.id) {
                 continue;
-            };
-            // Retention only removes old summaries. Journals, backups and shared diagnostic
-            // logs retain their original paths so recovery evidence cannot be severed.
-            match fs::remove_file(path) {
+            }
+            match self.remove_operation_record(&operation.id) {
                 Ok(()) => {
-                    self.state.lock().unwrap().operations.remove(&operation.id);
+                    state.operations.remove(&operation.id);
+                    self.emit_locked(&mut state, "operation.removed", json!({"id":operation.id}));
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.state.lock().unwrap().operations.remove(&operation.id);
-                }
-                Err(error) => self.log_error(&operation.id, &error.into()),
+                Err(error) => self.log_error(&operation.id, &error),
             }
         }
     }
@@ -1594,5 +1640,91 @@ mod tests {
         );
         service.prune_operations();
         assert_eq!(service.state.lock().unwrap().operations.len(), 55);
+    }
+
+    #[tokio::test]
+    async fn deleting_history_removes_only_the_confirmed_task_record() {
+        let test_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-work");
+        fs::create_dir_all(&test_root).unwrap();
+        let dir = tempfile::tempdir_in(test_root).unwrap();
+        let finished = operation("op-test-done", "failed", 0);
+        let active = operation("op-test-active", "running", 1);
+        let recovery = operation("op-test-recovery", "failed", 2);
+        for task in [&finished, &active, &recovery] {
+            let path = managed(
+                dir.path(),
+                &format!("cache/operations/{}/operation.json", task.id),
+            )
+            .unwrap();
+            atomic_json(&path, task).unwrap();
+        }
+        let service = Service::open(dir.path(), "0.4.3").unwrap();
+        // Mark the in-progress task as live after opening the isolated workspace.
+        service
+            .state
+            .lock()
+            .unwrap()
+            .operations
+            .insert(active.id.clone(), active.clone());
+        let recovery_root = dir.path().join("cache/operations/op-test-recovery");
+        atomic_json(
+            &recovery_root.join("transaction.json"),
+            &json!({"phase":"committing"}),
+        )
+        .unwrap();
+        for relative in [
+            "cache/operations/op-test-done/user.txt",
+            "cache/operations/op-test-recovery/backup/user.txt",
+            "logs/install-errors.log",
+            "config/installed.json",
+            "tools/example/data/user.txt",
+        ] {
+            let path = dir.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "preserve").unwrap();
+        }
+        let delete = |id, confirmed| Request {
+            v: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            method: "operation.delete".into(),
+            params: json!({"operationId": id, "confirmed": confirmed}),
+        };
+        assert!(!service.dispatch(delete("op-test-done", false)).await.ok);
+        assert!(dir
+            .path()
+            .join("cache/operations/op-test-done/operation.json")
+            .is_file());
+        assert!(!service.dispatch(delete("op-test-active", true)).await.ok);
+        assert!(!service.dispatch(delete("op-test-recovery", true)).await.ok);
+        let mut events = service.subscribe();
+        let removed = service.dispatch(delete("op-test-done", true)).await;
+        assert!(removed.ok, "{:?}", removed.error);
+        let event = events.try_recv().unwrap();
+        assert_eq!(event.event, "operation.removed");
+        assert_eq!(event.data["id"], "op-test-done");
+        assert!(!dir
+            .path()
+            .join("cache/operations/op-test-done/operation.json")
+            .exists());
+        for relative in [
+            "cache/operations/op-test-done/user.txt",
+            "cache/operations/op-test-recovery/backup/user.txt",
+            "logs/install-errors.log",
+            "config/installed.json",
+            "tools/example/data/user.txt",
+        ] {
+            assert_eq!(
+                fs::read_to_string(dir.path().join(relative)).unwrap(),
+                "preserve",
+                "{relative}"
+            );
+        }
+        let restarted = Service::open_read_only(dir.path(), "0.4.3").unwrap();
+        assert!(!restarted
+            .state
+            .lock()
+            .unwrap()
+            .operations
+            .contains_key("op-test-done"));
     }
 }
