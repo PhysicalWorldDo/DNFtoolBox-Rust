@@ -157,7 +157,11 @@ function renderHome() {
   const fixed = focus;
   const news = fixed.filter(item => item.hasUpdate).sort((a, b) => String(release(b)?.date || '').localeCompare(String(release(a)?.date || ''))).slice(0, 3);
   const primary = primaryAction(tool, state.operations);
-  const pinned = fixed.map(item => `<button class="pin-card" data-act="focus" aria-pressed="${item.id === tool.id}" data-id="${esc(item.id)}" title="在首页查看${esc(item.name)}"><span class="pin-art">${art[item.id] ? `<img class="pin-art-img" src="assets/${art[item.id].file}" alt="">` : `<span aria-hidden="true">${esc(Array.from(item.name)[0])}</span>`}<span class="pin-overlay">${icon('open', 12)}</span></span><span class="pin-info"><strong>${esc(item.name)}</strong><small>${esc(version(item.installedVersion))}</small></span></button>`).join('');
+  const pinned = fixed.map(item => {
+    const action = primaryAction(item, state.operations);
+    const hint = action.action === 'launch' && !action.disabled ? '单击切换，双击启动' : '单击切换';
+    return `<button class="pin-card" data-act="focus" aria-pressed="${item.id === tool.id}" data-id="${esc(item.id)}" title="${esc(item.name)}：${hint}"><span class="pin-art">${art[item.id] ? `<img class="pin-art-img" src="assets/${art[item.id].file}" alt="">` : `<span aria-hidden="true">${esc(Array.from(item.name)[0])}</span>`}<span class="pin-overlay">${icon('open', 12)}</span></span><span class="pin-info"><strong>${esc(item.name)}</strong><small>${esc(version(item.installedVersion))}</small></span></button>`;
+  }).join('');
   return `<section class="hero ${visual ? '' : 'no-art'}" aria-label="聚焦工具">${visual ? `<img class="hero-img" src="assets/${visual.file}" alt="">` : `<div class="hero-category-art" aria-hidden="true"><span class="initial">${esc(Array.from(tool.name)[0])}</span></div>`}<div class="hero-shade"></div><div class="hero-copy"><h1>${esc(tool.name)}</h1>${visual ? `<p class="hero-en" lang="en">${visual.english}</p>` : ''}<div class="hero-meta"><span class="category">${esc(tool.category || '工具')}</span><span class="build-tag">${esc(version(tool.installedVersion || tool.latestVersion))}</span><span class="installed-label">${tool.installed ? '<i class="state-dot"></i>已安装' : '未安装'}</span></div><p class="hero-description">${esc(tool.description || '此工具暂未提供简介。')}</p><button class="hero-link" data-act="detail" data-id="${esc(tool.id)}">${tool.hasUpdate ? `查看新版 ${esc(version(tool.latestVersion))}` : '查看版本详情'}${icon('right', 13)}</button></div>${primary.disabled && primary.reason ? `<p class="hero-disabled">${esc(primary.reason)}</p>` : ''}<div class="hero-foot">${homePagination(focus, index)}<div class="hero-actions">${primaryButton(tool, true)}<button class="hero-more" data-act="more" data-id="${esc(tool.id)}" aria-label="${esc(tool.name)}更多操作" title="更多工具操作">${icon('more', 23)}</button></div></div></section><div class="home-lower"><section><div class="section-heading"><div><h2>固定工具</h2><span class="count">${String(fixed.length).padStart(2, '0')}</span></div><button class="link-button" data-page="library">工具库 ${icon('right', 13)}</button></div><div class="pin-grid">${pinned}</div></section><section><div class="section-heading"><div><h2>版本动态</h2></div><button class="link-button" data-page="updates">全部更新信息 ${icon('right', 13)}</button></div>${news.length ? `<div class="news-list">${news.map(item => `<button class="news-row" data-act="detail" data-id="${esc(item.id)}"><i class="news-dot"></i><strong>${esc(item.name)}</strong><time>${esc(release(item)?.date || '')}</time><span class="news-sub">${esc(version(item.installedVersion))} → ${esc(version(item.latestVersion))}</span></button>`).join('')}</div>` : '<div class="empty">已固定工具暂无可更新版本。</div>'}</section></div>`;
 }
 
@@ -302,14 +306,51 @@ function restoreFocus(focus) {
   }
 }
 
+function syncHomeCards(grid, nextGrid) {
+  const cards = new Map([...grid.children].map(card => [card.dataset.id, card]));
+  let cursor = grid.firstElementChild;
+  for (const next of [...nextGrid.children]) {
+    const card = cards.get(next.dataset.id) || next;
+    for (const name of ['aria-pressed', 'title']) {
+      if (card.getAttribute(name) !== next.getAttribute(name)) card.setAttribute(name, next.getAttribute(name));
+    }
+    // Selection and preference acknowledgements leave these descendants intact,
+    // including the img/strong/svg that the browser uses as a dblclick target.
+    if (card.innerHTML !== next.innerHTML) card.innerHTML = next.innerHTML;
+    if (card !== cursor) grid.insertBefore(card, cursor);
+    cursor = card.nextElementSibling;
+  }
+  while (cursor) {const next = cursor.nextElementSibling; cursor.remove(); cursor = next;}
+}
+
+function syncHomeSurface(html) {
+  const surface = $('surface');
+  const next = document.createElement('template');
+  next.innerHTML = html;
+  const grid = surface.querySelector('.pin-grid');
+  const nextGrid = next.content.querySelector('.pin-grid');
+  if (!grid || !nextGrid) {surface.innerHTML = html; return;}
+  const hero = surface.querySelector('.hero');
+  const nextHero = next.content.querySelector('.hero');
+  if (hero.outerHTML !== nextHero.outerHTML) hero.replaceWith(nextHero);
+  syncHomeCards(grid, nextGrid);
+  grid.parentElement.querySelector('.count').textContent = nextGrid.parentElement.querySelector('.count').textContent;
+  const news = grid.parentElement.nextElementSibling;
+  const nextNews = nextGrid.parentElement.nextElementSibling;
+  if (news.innerHTML !== nextNews.innerHTML) news.innerHTML = nextNews.innerHTML;
+}
+
 function render() {
+  const active = document.activeElement;
   const focus = rememberFocus();
   selectedTool();
   syncChrome();
   const views = {home: renderHome, library: renderLibrary, updates: renderUpdates, settings: renderSettings, about: renderAbout};
-  $('surface').innerHTML = ui.loading || !state.sessionId ? connectionState() : views[ui.page]();
+  const html = ui.loading || !state.sessionId ? connectionState() : views[ui.page]();
+  if (ui.page === 'home' && $('surface').firstElementChild?.classList.contains('hero')) syncHomeSurface(html);
+  else $('surface').innerHTML = html;
   if (ui.modal) renderModal();
-  restoreFocus(focus);
+  if (!active?.isConnected) restoreFocus(focus);
 }
 
 let renderQueued = false;
@@ -520,16 +561,24 @@ async function refreshCatalog(showSelf = false, reason = 'manual') {
   finally {ui.checking = false; render();}
 }
 
-async function focusTool(id) {
+let selectionRequest = null;
+async function focusTool(id, {preservePosition = false} = {}) {
   if (!findTool(id) || !pins().includes(id)) return;
   const sessionId = state.sessionId;
+  const homeCard = preservePosition && ui.page === 'home';
+  const pendingHere = selectionRequest?.sessionId === sessionId;
+  if (homeCard && ui.selectedId === id && (pendingHere ? selectionRequest.id === id : state.preferences.lastSelectedToolId === id)) return;
+  const request = {id, sessionId};
+  selectionRequest = request;
   ui.selectedId = id;
-  go('home');
+  if (homeCard) render();
+  else go('home');
   try {
     const preferences = await bridge.dispatch('preferences.selectTool', {toolId: id});
     if (sessionId === state.sessionId) applyPreferences(state, preferences);
   }
   catch (error) {toast(error.message);}
+  finally {if (selectionRequest === request) selectionRequest = null;}
 }
 
 async function pinTool(id) {
@@ -633,7 +682,7 @@ async function handleAction(element) {
       return primary.action === 'launch' ? launchTool(id) : requestOperation(primary.action, id, primary.version || tool.latestVersion || tool.installedVersion);
     }
     case 'launch': return launchTool(id);
-    case 'focus': return focusTool(id);
+    case 'focus': return focusTool(id, {preservePosition: element.classList?.contains('pin-card')});
     case 'pin': return pinTool(id);
     case 'detail': return openModal('detail', {id});
     case 'more': return openModal('more', {id});
@@ -697,6 +746,14 @@ document.addEventListener('click', event => {
   if (element.hasAttribute('data-category')) {ui.category = element.dataset.category; render(); return;}
   if (element.hasAttribute('data-tab')) {ui.tab = element.dataset.tab; render(); return;}
   handleAction(element).catch(error => showError(error));
+});
+document.addEventListener('dblclick', event => {
+  const card = event.target.closest('.pin-card[data-act="focus"]');
+  if (ui.page !== 'home' || !card || card.disabled || !$('surface').contains(card) || !pins().includes(card.dataset.id)) return;
+  const tool = findTool(card.dataset.id);
+  if (!tool) return;
+  const primary = primaryAction(tool, state.operations);
+  if (primary.action === 'launch' && !primary.disabled) launchTool(tool.id).catch(showError);
 });
 document.addEventListener('input', event => {
   if (event.target.id === 'tool-search') {ui.query = event.target.value; updateLibraryResults();}
