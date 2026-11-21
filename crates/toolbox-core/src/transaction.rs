@@ -138,11 +138,16 @@ pub(crate) fn prepare(
     fs::create_dir_all(&staging)?;
     let mut zip = zip::ZipArchive::new(fs::File::open(archive_path)?)?;
     let mut names = BTreeSet::new();
+    let mut paths = Vec::with_capacity(zip.len());
     let mut size = 0_u64;
     for index in 0..zip.len() {
         let member = zip.by_index(index)?;
-        let name = member.name().trim_end_matches('/');
-        crate::validate_entry(name)?;
+        // Some Windows ZIP producers store backslashes in member names.
+        let name = member
+            .name()
+            .trim_end_matches(['/', '\\'])
+            .replace('\\', "/");
+        crate::validate_entry(&name)?;
         if !names.insert(name.to_lowercase()) {
             return Err(CoreError::invalid("ZIP 含重复或大小写冲突路径"));
         }
@@ -157,6 +162,7 @@ pub(crate) fn prepare(
         size = size
             .checked_add(member.size())
             .ok_or_else(|| CoreError::invalid("ZIP 大小溢出"))?;
+        paths.push(name);
     }
     let target = managed(workspace, &format!("tools/{}", manifest.id))?;
     let old_size = tree_size(&target)?;
@@ -166,11 +172,10 @@ pub(crate) fn prepare(
             .saturating_add(old_size)
             .saturating_add(16 * 1024 * 1024),
     )?;
-    for index in 0..zip.len() {
+    for (index, name) in paths.iter().enumerate() {
         check_cancel(cancel)?;
         let mut member = zip.by_index(index)?;
-        let name = member.name().trim_end_matches('/').to_string();
-        let path = managed(&staging, &name)?;
+        let path = managed(&staging, name)?;
         if member.is_dir() {
             fs::create_dir_all(path)?;
             continue;

@@ -238,6 +238,75 @@ async fn install_switch_and_uninstall_preserve_user_data_and_commit_records() {
     );
 }
 #[tokio::test]
+async fn installs_zip_members_with_windows_separators() {
+    let dir = sandbox();
+    let (url, hash) = package(
+        dir.path(),
+        "1.0.0",
+        &[
+            (r"bin\run.cmd", "entry"),
+            (r"bin\app\readme.txt", "contents"),
+        ],
+    );
+    setup(
+        dir.path(),
+        vec![json!({"version":"1.0.0","packageUrl":url,"sha256":hash})],
+    );
+    let service = Service::open(dir.path(), "0.4.2").unwrap();
+    refresh(&service).await;
+    let start = call(
+        &service,
+        "operation.start",
+        json!({"kind":"install","toolId":"palette"}),
+    )
+    .await;
+    let result = finished(&service, start["operationId"].as_str().unwrap()).await;
+    assert_eq!(result["state"], "succeeded", "{result}");
+    let target = dir.path().join("tools/palette");
+    assert_eq!(
+        fs::read_to_string(target.join("bin/run.cmd")).unwrap(),
+        "entry"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("bin/app/readme.txt")).unwrap(),
+        "contents"
+    );
+}
+
+#[tokio::test]
+async fn rejects_zip_members_that_normalize_to_the_same_path() {
+    let dir = sandbox();
+    let (url, hash) = package(
+        dir.path(),
+        "1.0.0",
+        &[("bin/run.cmd", "first"), (r"BIN\run.cmd", "second")],
+    );
+    setup(
+        dir.path(),
+        vec![json!({"version":"1.0.0","packageUrl":url,"sha256":hash})],
+    );
+    let service = Service::open(dir.path(), "0.4.2").unwrap();
+    refresh(&service).await;
+    let start = call(
+        &service,
+        "operation.start",
+        json!({"kind":"install","toolId":"palette"}),
+    )
+    .await;
+    let result = finished(&service, start["operationId"].as_str().unwrap()).await;
+    assert_eq!(result["state"], "failed", "{result}");
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("重复或大小写冲突"),
+        "{result}"
+    );
+    assert!(!dir.path().join("tools/palette").exists());
+    assert!(!dir.path().join("config/installed.json").exists());
+}
+
+#[tokio::test]
 async fn bad_hash_and_zip_escape_never_create_install_records() {
     let dir = sandbox();
     let (url, _) = package(dir.path(), "1.0.0", &[("bin/run.cmd", "@exit /b 0")]);
