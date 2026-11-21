@@ -72,6 +72,7 @@ function checkedAt() {
 
 function syncChrome() {
   $('app-shell').dataset.view = ui.page;
+  syncScrollChrome();
   syncWindowChrome();
   const nav = key => {
     const [label, glyph, title] = pages[key];
@@ -86,6 +87,11 @@ function syncChrome() {
   $('surface').setAttribute('aria-label', pages[ui.page][2]);
   document.title = `物理世界的工具箱 · ${pages[ui.page][2]}`;
   renderNotice();
+}
+
+function syncScrollChrome() {
+  const scrolled = String(window.scrollY > 0);
+  if ($('app-shell').dataset.scrolled !== scrolled) $('app-shell').dataset.scrolled = scrolled;
 }
 
 function syncWindowChrome() {
@@ -694,6 +700,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && $('dialog').open) closeModal();
 });
 window.addEventListener('popstate', () => {closeModal(); ui.page = pageFromHash(); render(); checkUpdatesOnEntry(); window.scrollTo(0, 0);});
+window.addEventListener('scroll', syncScrollChrome, {passive: true});
 window.addEventListener('beforeunload', () => {if (unsubscribe) unsubscribe();});
 document.addEventListener('error', event => {
   const image = event.target;

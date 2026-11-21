@@ -25,6 +25,7 @@
 .shell[data-window-active=false] .window-controls button{color:inherit}
 .brand-mark{height:64px;border-bottom:0}
 .shell[data-view=home] .app-header{margin-bottom:calc(-1 * var(--titlebar-height));background:linear-gradient(180deg,#05070dcc,transparent);color:#f1f2f4}
+.shell[data-view=home][data-scrolled=true] .app-header{background:var(--bg)}
 .shell[data-view=home] .hero{height:clamp(418px,calc(44vh + var(--titlebar-height)),606px);padding-top:calc(var(--titlebar-height) + 22px)}
 .shell[data-view=home] #notice:not(:empty){padding-top:var(--titlebar-height)}
 .shell[data-view=home] .connection-state,.shell[data-view=home] .home-empty{padding-top:calc(var(--titlebar-height) + 42px)}

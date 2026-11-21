@@ -21,11 +21,12 @@ async function app({busy = false, stateEventDuringQuery = false} = {}) {
     if (method === 'window.requestClose' && busy && !params.cancelTasks) throw Object.assign(new Error('有任务正在进行'), {code: 'BUSY'});
     return {accepted: true};
   }};
-  const context = vm.createContext({...model, createBridge: () => bridge, location: {hash: '#home'}, history: {pushState() {}}, document: {getElementById: node, activeElement: null, addEventListener(name, listener) {(listeners[name] ||= []).push(listener);}}, window: {scrollTo() {}, addEventListener() {}}, requestAnimationFrame(callback) {queueMicrotask(callback);}, setTimeout: () => 1, clearTimeout() {}, console});
+  const windowListeners = {}, appWindow = {scrollY: 0, scrollTo() {}, addEventListener(name, listener) {windowListeners[name] = listener;}};
+  const context = vm.createContext({...model, createBridge: () => bridge, location: {hash: '#home'}, history: {pushState() {}}, document: {getElementById: node, activeElement: null, addEventListener(name, listener) {(listeners[name] ||= []).push(listener);}}, window: appWindow, requestAnimationFrame(callback) {queueMicrotask(callback);}, setTimeout: () => 1, clearTimeout() {}, console});
   vm.runInContext(source, context);
   const settle = async () => {for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));};
   await settle();
-  return {calls, context, node, settle, emit: listeners.host, click(action) {for (const listener of listeners.click || []) listener({target: {closest: () => ({dataset: {window: action}, hasAttribute: name => name === 'data-window'})}});}};
+  return {calls, context, node, settle, emit: listeners.host, scroll(y) {appWindow.scrollY = y; windowListeners.scroll?.();}, click(action) {for (const listener of listeners.click || []) listener({target: {closest: () => ({dataset: {window: action}, hasAttribute: name => name === 'data-window'})}});}};
 }
 
 test('window notifications preserve maximize and focus state across sparse messages', () => {
@@ -70,6 +71,20 @@ test('a native notification received during the initial state query takes preced
   const ui = await app({stateEventDuringQuery: true});
   assert.equal(ui.node('window-maximize').attributes['aria-label'], '最大化窗口');
   assert.equal(ui.node('app-shell').dataset.windowActive, 'true');
+});
+
+test('scrolling changes only the title contrast state and restores the transparent home state at the top', async () => {
+  const ui = await app();
+  assert.equal(ui.node('app-shell').dataset.scrolled, 'false');
+  ui.node('surface').innerHTML = 'current editable surface';
+  ui.scroll(440);
+  await ui.settle();
+  assert.equal(ui.node('app-shell').dataset.scrolled, 'true');
+  assert.equal(ui.node('surface').innerHTML, 'current editable surface');
+  ui.scroll(0);
+  await ui.settle();
+  assert.equal(ui.node('app-shell').dataset.scrolled, 'false');
+  assert.equal(ui.node('surface').innerHTML, 'current editable surface');
 });
 
 test('close buttons retain task confirmation and send cancelTasks only after confirmation', async () => {
