@@ -21,26 +21,35 @@ async function app(about = legacyAbout) {
   vm.runInContext(source, context);
   const settle = async () => {for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));};
   await settle();
-  return {calls, node, settle, evaluate: script => vm.runInContext(script, context), clickLink() {
-    let prevented = false;
-    const element = {tagName: 'A', dataset: {act: 'link', id: 'qq-channel'}, hasAttribute: name => name === 'data-act'};
-    for (const listener of listeners.click || []) listener({target: {closest: () => element}, preventDefault() {prevented = true;}});
-    return prevented;
+  return {calls, node, settle, evaluate: script => vm.runInContext(script, context), clickChannel() {
+    const channel = node('surface').innerHTML.match(/<button\b[^>]*data-act="link" data-id="qq-channel"[^>]*>QQ频道<\/button>/);
+    assert.ok(channel, 'the rendered channel button is available');
+    const element = {tagName: 'BUTTON', dataset: {act: 'link', id: 'qq-channel'}, hasAttribute: name => name === 'data-act'};
+    for (const listener of listeners.click || []) listener({target: {closest: () => element}, preventDefault() {}});
   }};
 }
 
-test('normal about entry shows the complete channel invitation with a real link for new and legacy snapshots', async () => {
-  for (const about of [legacyAbout, {}, {...legacyAbout, qqChannelUrl: channelUrl, qqChannelText: channelText}]) {
+test('about entry places a concise channel button after the author action for new and legacy snapshots', async () => {
+  for (const about of [legacyAbout, {}, {...legacyAbout, githubUrl: 'https://github.com/PhysicalWorldDo/DNFTOOLBOX', qqChannelUrl: channelUrl, qqChannelText: channelText}]) {
     const ui = await app(about);
     const html = ui.node('surface').innerHTML;
-    assert.match(html, /<a\b[^>]*href="https:\/\/pd\.qq\.com\/s\/g907v9hdc"[^>]*data-act="link"[^>]*data-id="qq-channel"[^>]*>QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：https:\/\/pd\.qq\.com\/s\/g907v9hdc<\/a>/);
-    assert.doesNotMatch(html, /联系作者|1548220577|data-act="contact"/);
+    const linkButtons = [...html.matchAll(/<button\b[^>]*class="([^"]+)"[^>]*data-act="link" data-id="([^"]+)"[^>]*>([^<]+)<\/button>/g)];
+    assert.deepEqual(linkButtons.map(([, , target, label]) => [target, label]), [
+      ...(about.githubUrl ? [['project', 'GitHub 项目']] : []),
+      ...(about.feedbackUrl ? [['feedback', '问题反馈']] : []),
+      ...(about.bilibiliUrl ? [['author', '作者 B 站']] : []),
+      ['qq-channel', 'QQ频道']
+    ]);
+    const channel = linkButtons.find(([, , target]) => target === 'qq-channel');
+    const feedback = linkButtons.find(([, , target]) => target === 'feedback');
+    if (feedback) assert.equal(channel[1], feedback[1]);
+    assert.doesNotMatch(html, /联系作者|1548220577|data-act="contact"|<a\b[^>]*data-id="qq-channel"|QQ频道:点击链接|https:\/\/pd\.qq\.com/);
   }
 });
 
-test('channel link activation uses the controlled host target and prevents WebView navigation', async () => {
+test('channel button activation directly uses the controlled host target', async () => {
   const ui = await app();
-  assert.equal(ui.clickLink(), true);
+  ui.clickChannel();
   await ui.settle();
   const calls = ui.calls.filter(call => call.method === 'system.openLink');
   assert.equal(calls.length, 1);
