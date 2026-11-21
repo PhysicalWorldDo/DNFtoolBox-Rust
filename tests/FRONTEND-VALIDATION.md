@@ -3,13 +3,13 @@
 生产入口是 `frontend/index.html`，Tauri `frontendDist` 只嵌入 `frontend/`。它不包含工具目录样本、安装记录、任务定时器、fixture 或远程 CDN；缺少 Tauri 桥时会显示宿主连接错误，不会创建演示状态。
 
 ```powershell
-node --test tests/frontend-contract.test.mjs
+node --test tests/*.test.mjs
 node tests/browser-fixture.mjs --port=4173
 ```
 
-在 Codex 内置浏览器打开 `http://127.0.0.1:4173`。本地服务只在响应 HTML 时插入测试桥，磁盘上的生产 HTML 不变。此桥记录请求，模拟回包和事件；不启动程序、不安装文件、不操作剪贴板、不打开外链，不证明原生后端行为。默认四个合同样本只存在于 `tests/browser-fixture.mjs`。
+在 Codex 内置浏览器打开 `http://127.0.0.1:4173`。本地服务只在响应 HTML 时插入测试桥，磁盘上的生产 HTML 不变。此桥记录请求，模拟回包和事件；不启动程序、不安装文件、不操作剪贴板、不打开外链，不证明原生后端行为。默认五个合同样本只存在于 `tests/browser-fixture.mjs`；未固定的阿拉德调色保留为旧选中偏好，用于确认它不会进入首页。
 
-可选场景：`--scenario=empty`、`--scenario=offline`、`--scenario=blocked`。使用真实 Rust `app.bootstrap` 捕获数据时：`node tests/browser-fixture.mjs --snapshot=E:\完整路径\bootstrap.json --port=4173`。输入可以是 bootstrap 对象或带 `result` 的成功回包，后续操作仍由 fixture 模拟。
+可选场景：`--scenario=empty`、`--scenario=no-pins`、`--scenario=offline`、`--scenario=blocked`。`no-pins` 保留完整目录，首页显示前往工具库固定的空状态。使用真实 Rust `app.bootstrap` 捕获数据时：`node tests/browser-fixture.mjs --snapshot=E:\完整路径\bootstrap.json --port=4173`。输入可以是 bootstrap 对象或带 `result` 的成功回包，后续操作仍由 fixture 模拟。
 
 测试端点：
 
@@ -19,7 +19,9 @@ node tests/browser-fixture.mjs --port=4173
 
 独立 QA 应先用真实 Rust 捕获验证页面数据，必要时把上述测试桥替换为受控本机转发；文件事务、下载、进程、剪贴板、原生退出和自更新必须另测真实宿主。
 
-可稳定定位的界面属性：`[data-page]`、`[data-act]`、`[data-tool-id]`、`[data-operation-id]`。主要检查工作台固定与切换、搜索/分类/状态、版本禁用和切换确认、卸载路径与数据提示、真实任务的不定进度/失败/取消/重试、设置草稿与 revision 冲突、本体仅发布页和完整更新包两条路径、`window.changed {closeRequested:true}` 的忙退出确认。所有窗口尺寸和交互由 Codex 内置浏览器验证，禁止 Computer Use。
+可稳定定位的界面属性：`[data-page]`、`[data-act]`、`[data-tool-id]`、`[data-operation-id]`。主要检查首页固定与切换、搜索/分类/状态、版本禁用和切换确认、卸载路径与数据提示、真实任务的不定进度/失败/取消/重试、设置草稿与 revision 冲突、本体仅发布页和完整更新包两条路径、`window.changed {closeRequested:true}` 的忙退出确认。所有窗口尺寸和交互由 Codex 内置浏览器验证，禁止 Computer Use。
+
+首页轮播、固定卡与版本动态共用可用的固定工具列表，并保持固定顺序；旧偏好、已下架 ID 不会引入其他工具。取消当前项回到剩余固定项，取消最后一项显示空状态，工具库与更新页保留完整目录。超过五个固定项时，轮播使用前后按钮与当前/总数，避免分页点挤占启动按钮。图钉在各宽度保留可操作性，固定时显示实心黄色状态。`home-pins.test.mjs` 还验证并行偏好响应和事件不会回退到旧 revision，旧会话回包不会覆盖重连后的偏好。
 
 ## 已执行的快速冒烟
 
