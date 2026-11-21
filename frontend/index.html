@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>物理世界的工具箱</title>
+  <link rel="stylesheet" href="assets/workbench.css">
+  <link rel="stylesheet" href="assets/panels.css">
+  <link rel="stylesheet" href="assets/app.css">
+  <script type="module" src="assets/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#surface">跳到内容</a>
+  <aside class="rail" aria-label="应用导航">
+    <button class="brand-mark" data-page="home" aria-label="物理世界的工具箱工作台" title="工具箱工作台"><svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="m4 12 13-7 13 7-13 7z" fill="#ffe275"/><path d="m4 16 11 6v13L4 29z" fill="#ffd247"/><path d="m19 22 16-9v7l-10 6v5l-6 4z" fill="#ffdc62"/></svg></button>
+    <nav id="main-nav" aria-label="工作区"></nav>
+    <nav id="utility-nav" aria-label="应用选项"></nav>
+  </aside>
+  <div class="shell">
+    <header class="app-header">
+      <div class="wordmark"><strong>物理世界的工具箱</strong><span id="app-version" class="release">正在载入</span></div>
+      <div class="header-utils"><span class="snapshot" id="catalog-source"></span><button id="global-search" class="search-shortcut" title="搜索工具（Ctrl+K）" aria-label="搜索工具"></button></div>
+    </header>
+    <div id="notice" aria-live="polite"></div>
+    <main id="surface" tabindex="-1" aria-label="工作台"><div class="connection-state" role="status"><h1>正在打开工具箱</h1><p>读取本地目录、安装记录和任务状态…</p></div></main>
+    <footer class="app-footer"><span id="summary">正在读取工作区</span><button class="link-button" data-act="workspace">打开工作目录 <span aria-hidden="true">↗</span></button></footer>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div class="dialog-head"><h2 id="dialog-title"></h2><button id="dialog-close" class="icon-button" aria-label="关闭对话框"></button></div><div id="dialog-body"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>工具箱界面需要启用 JavaScript。</noscript>
+</body>
+</html>

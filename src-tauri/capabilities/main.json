@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Only the embedded main window may call the semantic toolbox dispatcher.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-toolbox-dispatch"]
+}
