@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as model from '../frontend/assets/model.mjs';
 
-const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\n/gm, '');
+const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '');
 const tool = (id, name, hasUpdate = false) => ({id, name, category: '图像工具', description: `${name}介绍`, installed: true, installedVersion: '1.0', latestVersion: hasUpdate ? '2.0' : '1.0', hasUpdate, actions: ['launch', 'update'], availableVersions: [{version: hasUpdate ? '2.0' : '1.0', date: '2026-11-21', canInstall: true}]});
 
 async function app({pinnedToolIds = ['rep_player', 'dnf_skill_prism', 'dnf_avatar_studio'], lastSelectedToolId = 'dnf_palette_prism', catalog, deferPreferences = false, deferLaunch = false, failSelectionOnce = false, operations = []} = {}) {

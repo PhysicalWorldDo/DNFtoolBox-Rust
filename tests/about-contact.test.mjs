@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as model from '../frontend/assets/model.mjs';
 
-const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\n/gm, '');
+const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '');
 const channelUrl = 'https://pd.qq.com/s/g907v9hdc';
 const channelText = `QQ频道:点击链接加入腾讯频道【物理世界的工具箱】：${channelUrl}`;
 const legacyAbout = {author: '物理世界的欺骗', qqNumber: '1548220577', feedbackUrl: 'https://github.com/PhysicalWorldDo/DNFTOOLBOX/issues', bilibiliUrl: 'https://space.bilibili.com/492488982', sponsorQrs: [{id: 'weixin', title: '微信赞助', imageUrl: 'assets/sponsor-weixin.jpg'}]};

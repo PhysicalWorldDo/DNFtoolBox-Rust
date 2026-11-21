@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as model from '../frontend/assets/model.mjs';
 
-const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\n/gm, '');
+const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '');
 // This is the minimized capture from .work/qa/partial-batch.event.json.
 const capture = JSON.parse(await readFile(new URL('./fixtures/partial-batch.event.json', import.meta.url), 'utf8'));
 

@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as model from '../frontend/assets/model.mjs';
 
-const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\n/gm, '');
+const source = (await readFile(new URL('../frontend/assets/app.mjs', import.meta.url), 'utf8')).replace(/^import .*\r?\n/gm, '');
 
 async function app({busy = false, stateEventDuringQuery = false} = {}) {
   const calls = [], listeners = {}, nodes = new Map();

@@ -15,6 +15,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-2025
+    outputs:
+      source_sha: ${{ steps.version.outputs.source_sha }}
     steps:
       - name: Validate release tag
         if: inputs.release_tag != ''
@@ -33,6 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Check version
+        id: version
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -47,6 +50,9 @@ jobs:
           if ($env:RELEASE_TAG -and $env:RELEASE_TAG -cne "v$($app.version)") {
             throw "Tag $env:RELEASE_TAG does not match application version $($app.version)."
           }
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the source commit.' }
+          "source_sha=$sha" >> $env:GITHUB_OUTPUT
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -88,7 +94,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
+          $tagSha = gh api "repos/$env:GITHUB_REPOSITORY/commits/refs%2Ftags%2F$env:RELEASE_TAG" --jq .sha
+          if ($LASTEXITCODE -ne 0 -or $tagSha -cne $env:SOURCE_SHA) {
+            throw 'The release tag no longer points to the source that was built.'
+          }
           $version = $env:RELEASE_TAG.Substring(1)
           $zip = Get-Item -LiteralPath "release-assets/PhysicalWorldToolbox-$version-win-x64.zip"
           gh release create $env:RELEASE_TAG $zip.FullName --repo $env:GITHUB_REPOSITORY --verify-tag --title $env:RELEASE_TAG --generate-notes
