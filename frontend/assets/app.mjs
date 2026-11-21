@@ -205,7 +205,7 @@ function operationRow(operation) {
   if (failedItems) controls += button('重试失败项', 'retry-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   else if (['failed', 'cancelled', 'recoveryRequired'].includes(operation.state) && operation.error?.retryable !== false) controls += button('重试', 'retry-task', {id: operation.id, disabled: ui.pending.has(`task:${operation.id}`)});
   controls += button('日志', 'open-log', {id: operation.id});
-  if (operation.state === 'succeeded' && !operation.toolId && state.toolbox.hasUpdate && ['toolboxUpdate', 'selfUpdate', 'downloadUpdate'].includes(operation.kind)) controls = button('应用更新并重启', 'apply-self', {id: operation.id}) + controls;
+  if (preparedUpdate(operation)) controls = button('应用更新并重启', 'apply-self', {id: operation.id}) + controls;
   const stage = active ? stageNames[operation.stage] || operation.stage || stateNames[operation.state] : status;
   const note = operation.error?.message || (partial ? operation.result?.message || '部分工具未完成，请查看各项结果。' : active && !operation.canCancel ? '正在提交或恢复文件，请等待任务完成。' : operation.state === 'succeeded' ? operation.result?.message || '' : '');
   return `<article class="pz-job" data-operation-id="${esc(operation.id)}"><div class="pz-jobline">${tool ? tile(tool, 'small') : icon('download', 28)}<div class="pz-grow"><strong>${esc(name)}</strong><div class="pz-meta"><span>${esc(kindNames[operation.kind] || operation.kind)}</span>${operation.version ? `<span>${esc(version(operation.version))}</span>` : ''}<span>${esc(stage)}</span></div></div><small>${active ? `${percent == null ? bytes(done) : `${percent}%`}${total > 0 ? ` · ${bytes(total)}` : ''}` : esc(status)}</small><div class="pz-actions">${controls}</div></div>${progress}${note ? `<p class="pz-jobnote ${operation.error ? 'error' : ''}">${esc(note)}</p>` : ''}${operation.children?.length ? `<div class="pz-jobnote">${operation.children.map(child => `<div>${esc(child.toolId || child.name || child.id || '')} · ${esc(stateNames[child.state] || child.state || '')}${child.error?.message ? ` · ${esc(child.error.message)}` : ''}</div>`).join('')}</div>` : ''}</article>`;
@@ -230,7 +230,7 @@ function renderUpdates() {
     const list = ui.tab === 'updates' ? fresh : uninstalled;
     body = list.length ? `<div class="pz-list">${list.map(catalogRow).join('')}</div>` : empty(ui.tab === 'updates' ? '当前没有可更新的工具' : '当前目录中的工具均已安装', state.catalog.source === 'empty' ? '检查工具目录后可查看新版本。' : '检查更新可以核对最新发布信息。');
   }
-  return `<section class="page-wrap pz-page">${heading('安装与更新', '检查版本、管理安装包，跟踪每个工具的处理进度。', button(ui.checking ? '检查中…' : '检查更新', 'refresh', {disabled: ui.checking}) + button('全部更新', 'batch', {className: 'primary', disabled: !eligible.length || Boolean(activeTask()) || ui.checking}))}<nav class="pz-tabs" aria-label="安装状态">${tabs.map(([key, name, count]) => `<button type="button" data-tab="${key}" aria-pressed="${ui.tab === key}">${name} <span>${count}</span></button>`).join('')}</nav><div class="pz-source"><span class="pz-dot"></span>${esc(ui.checking ? '正在检查工具目录…' : freshness())}${checkedAt() ? ` · 上次检查 ${esc(checkedAt())}` : ''}</div>${body}</section>`;
+  return `<section class="page-wrap pz-page">${heading('安装与更新', '检查版本、管理安装包，跟踪每个工具的处理进度。', selfCheckButton() + button(ui.checking ? '检查中…' : '检查工具更新', 'refresh', {disabled: ui.checking}) + button('全部更新', 'batch', {className: 'primary', disabled: !eligible.length || Boolean(activeTask()) || ui.checking}))}<nav class="pz-tabs" aria-label="安装状态">${tabs.map(([key, name, count]) => `<button type="button" data-tab="${key}" aria-pressed="${ui.tab === key}">${name} <span>${count}</span></button>`).join('')}</nav><div class="pz-source"><span class="pz-dot"></span>${esc(ui.checking ? '正在检查工具目录…' : freshness())}${checkedAt() ? ` · 上次检查 ${esc(checkedAt())}` : ''}</div>${body}</section>`;
 }
 
 function resetSettingsDraft() {
@@ -248,14 +248,30 @@ function renderSettings() {
   return `<section class="page-wrap pz-page">${heading('设置', '管理下载连接、工作目录提示与工具箱本体。')}<section class="pz-section"><h2>下载与目录</h2>${conflict ? `<div class="settings-conflict" role="status">设置已在其他位置发生变化。保留当前草稿，或重新载入最新设置。 ${button('重新载入设置', 'reload-settings')}</div>` : ''}<form id="toolbox-settings" class="pz-form"><label class="pz-check"><span><b>启用 GitHub 下载代理</b><small>用于目录和安装包下载。节点按填写顺序尝试。</small></span><input type="checkbox" name="enabled" role="switch" ${draft.enabled ? 'checked' : ''}></label><label class="pz-field">代理节点 <small>每行一个 HTTP 或 HTTPS 地址</small><textarea name="nodes" rows="4" spellcheck="false" autocapitalize="off" ${draft.enabled ? '' : 'disabled'}>${esc(draft.nodes)}</textarea></label><label class="pz-field">发布通道<select name="channel"><option value="stable" ${draft.channel === 'stable' ? 'selected' : ''}>稳定版</option><option value="beta" ${draft.channel === 'beta' ? 'selected' : ''}>测试版</option></select></label><label class="pz-check"><span><b>打开时检查工作目录</b><small>目录与桌面、下载或游戏文件混用时显示提醒。</small></span><input type="checkbox" name="directoryWarning" role="switch" ${draft.directoryWarning ? 'checked' : ''}></label><p id="settings-message" class="settings-status" role="status">${esc(ui.settingsMessage)}</p><div class="pz-actions"><button class="button primary pz-btn" type="submit" ${ui.pending.has('settings') ? 'disabled' : ''}>${ui.pending.has('settings') ? '正在保存…' : '保存设置'}</button>${button('恢复默认值', 'proxy-defaults', {disabled: ui.pending.has('settings')})}<span class="settings-stamp">${ui.settingsDirty ? '有未保存的更改' : '已与本地设置同步'}</span></div></form></section><section class="pz-section"><h2>工具箱版本</h2>${selfUpdateBody()}</section><section class="pz-section"><h2>工作目录</h2><div class="pz-split"><div class="pz-grow"><b>便携工具箱工作区</b><p>${esc(state.directoryWarning?.workspace || '与工具箱主程序位于同一目录')}</p></div>${button('打开目录', 'workspace')}</div></section></section>`;
 }
 
+function preparedUpdate(operation) {
+  return operation.kind === 'toolboxUpdate' && operation.state === 'succeeded' && operation.result?.readyToApply;
+}
+
+function selfCheckButton() {
+  const checking = ui.pending.has('self-check');
+  return button(checking ? '正在检查本体…' : '检查本体更新', 'self-check', {disabled: checking});
+}
+
 function selfUpdateBody() {
   const toolbox = state.toolbox;
   const available = Boolean(toolbox.hasUpdate);
-  const pending = state.operations.find(operation => !operation.toolId && ['toolboxUpdate', 'selfUpdate', 'downloadUpdate'].includes(operation.kind) && (isActive(operation) || operation.state === 'succeeded'));
-  let action = button(ui.checking ? '检查中…' : '检查本体更新', 'self-check', {disabled: ui.checking});
-  if (available && toolbox.canDownload) action += pending?.state === 'succeeded' ? button('应用更新并重启', 'apply-self', {id: pending.id, className: 'primary'}) : pending ? button('查看下载任务', 'show-tasks') : button(`下载 ${version(toolbox.latestVersion)}`, 'download-self', {className: 'primary', disabled: ui.pending.has('self-download')});
-  if (available && toolbox.releaseUrl) action += button('查看发布页', 'link', {id: 'release'});
-  return `<div class="pz-split self-update"><div class="pz-grow"><b>物理世界的工具箱 ${esc(version(toolbox.version))}</b><p>${available ? `发现新版 ${esc(version(toolbox.latestVersion))}${toolbox.sizeBytes != null ? ` · ${esc(bytes(toolbox.sizeBytes))}` : ''}` : '当前目录未提供更高的本体版本。'}</p>${available && !toolbox.canDownload ? '<p>本次更新从发布页获取。</p>' : ''}</div><div class="pz-actions">${action}</div></div>`;
+  const staged = state.operations.find(operation => preparedUpdate(operation) && (!toolbox.checked || operation.version === toolbox.latestVersion));
+  const downloading = state.operations.some(operation => operation.kind === 'toolboxUpdate' && isActive(operation));
+  let action = selfCheckButton();
+  let status = toolbox.checked ? 'GitHub 上暂无更新的正式版。' : '从 GitHub Releases 检查本体版本。';
+  if (available) status = `发现新版 ${version(toolbox.latestVersion)}${toolbox.sizeBytes != null ? ` · ${bytes(toolbox.sizeBytes)}` : ''}`;
+  if (staged) {
+    status = `${version(staged.version)} 已校验，可应用更新。`;
+    action += button('应用更新并重启', 'apply-self', {id: staged.id, className: 'primary'});
+  } else if (downloading) action += button('查看下载任务', 'show-tasks');
+  else if (available && toolbox.canDownload) action += button(`下载 ${version(toolbox.latestVersion)}`, 'download-self', {className: 'primary', disabled: ui.pending.has('self-download')});
+  if (toolbox.releaseUrl) action += button('查看发布页', 'link', {id: 'release'});
+  return `<div class="pz-split self-update"><div class="pz-grow"><b>物理世界的工具箱 ${esc(version(toolbox.version))}</b><p>${esc(status)}</p>${available && !toolbox.canDownload ? '<p>可从 GitHub 发布页手动下载。</p>' : ''}</div><div class="pz-actions">${action}</div></div>`;
 }
 
 function renderAbout() {
@@ -429,7 +445,8 @@ function renderModal() {
     body = `${selfUpdateBody()}${state.toolbox.hasUpdate ? notes(state.toolbox.changelog) : ''}`;
   } else if (modal.type === 'apply-self') {
     title = '应用工具箱更新';
-    body = `<p>更新到 ${esc(version(state.toolbox.latestVersion))}。工具箱将关闭并重新打开，已安装工具及配置会保留。</p>${activeTask() ? '<p class="native-close-note">请等待当前安装任务完成后再应用更新。</p>' : ''}<div class="pz-actions">${button('稍后', 'close')}${button('应用更新并重启', 'confirm-apply-self', {id: modal.id, className: 'primary', disabled: Boolean(activeTask()) || ui.pending.has('self-apply')})}</div>`;
+    const staged = state.operations.find(operation => operation.id === modal.id && preparedUpdate(operation));
+    body = staged ? `<p>更新到 ${esc(version(staged.version))} 时，工具箱将备份并替换主程序，再自动重启。已安装工具、配置和个人文件会保留。</p>${activeTask() ? '<p class="native-close-note">请等待当前安装任务完成后再应用更新。</p>' : ''}<div class="pz-actions">${button('稍后', 'close')}${button('应用更新并重启', 'confirm-apply-self', {id: modal.id, className: 'primary', disabled: Boolean(activeTask()) || ui.pending.has('self-apply')})}</div>` : '<p>此更新任务已失效。请重新检查本体更新。</p>';
   } else if (modal.type === 'sponsor') {
     const sponsor = state.about.sponsorQrs?.find(item => item.id === modal.id);
     const source = imageUrl(sponsor?.imageUrl);
@@ -479,7 +496,7 @@ function checkUpdatesOnEntry() {
   if (ui.loading || !state.sessionId || ui.page !== 'updates' || catalogCheckSession === state.sessionId) return;
   catalogCheckSession = state.sessionId;
   const sessionCheck = state.operations.some(operation => ['refresh', 'catalogRefresh', 'catalog.refresh'].includes(operation.kind) && operation.request?.sessionId === state.sessionId);
-  if (!ui.checking && !sessionCheck) refreshCatalog(false, 'updatesPage');
+  if (!ui.checking && !sessionCheck) refreshCatalog('updatesPage');
 }
 async function refreshSnapshot() {
   if (refreshPromise) return refreshPromise;
@@ -547,7 +564,7 @@ async function connect() {
   } catch (error) {connectionError(error);}
 }
 
-async function refreshCatalog(showSelf = false, reason = 'manual') {
+async function refreshCatalog(reason = 'manual') {
   if (state.sessionId) catalogCheckSession = state.sessionId;
   if (ui.checking) return;
   ui.checking = true;
@@ -555,8 +572,7 @@ async function refreshCatalog(showSelf = false, reason = 'manual') {
   try {
     await bridge.dispatch('catalog.refresh', {reason});
     await refreshSnapshot();
-    if (showSelf) openModal('self');
-    else if (reason !== 'updatesPage') toast('已检查工具目录。');
+    if (reason !== 'updatesPage') toast('已检查工具目录。');
   } catch (error) {showError(error);}
   finally {ui.checking = false; render();}
 }
@@ -700,7 +716,7 @@ async function handleAction(element) {
     case 'link': return run(`link:${id}`, () => bridge.dispatch('system.openLink', {target: id}));
     case 'sponsor': return openModal('sponsor', {id});
     case 'refresh': return refreshCatalog();
-    case 'self-check': return refreshCatalog(true);
+    case 'self-check': return run('self-check', async () => {await bridge.dispatch('toolbox.checkUpdate'); await refreshSnapshot(); openModal('self');});
     case 'download-self': return run('self-download', async () => {await bridge.dispatch('toolbox.downloadUpdate', {version: state.toolbox.latestVersion}); closeModal(); ui.tab = 'tasks'; go('updates'); await refreshSnapshot();});
     case 'apply-self': return openModal('apply-self', {id});
     case 'confirm-apply-self': return run('self-apply', () => bridge.dispatch('toolbox.applyUpdate', {operationId: id, confirmed: true}));

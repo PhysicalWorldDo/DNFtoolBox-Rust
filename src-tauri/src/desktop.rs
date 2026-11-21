@@ -3,6 +3,7 @@ use crate::{
     cli::{self, Arguments, Mode},
     instance::InstanceGuard,
     native,
+    release::{self, Package, ReleaseStatus},
     self_update::{self, Stage, Transaction},
 };
 use serde_json::{json, Value};
@@ -31,6 +32,7 @@ struct DownloadTask {
 pub struct HostState {
     pub service: Arc<Service>,
     downloads: Mutex<BTreeMap<String, DownloadTask>>,
+    release: Mutex<ReleaseStatus>,
     completed_requests: Mutex<BTreeMap<String, (String, Response)>>,
     native_dispatch: tokio::sync::Mutex<()>,
     pub closing: AtomicBool,
@@ -51,7 +53,7 @@ impl HostState {
                 if let Ok(tx) =
                     Transaction::load(service.workspace(), &entry.file_name().to_string_lossy())
                 {
-                    if tx.stage == Stage::Prepared {
+                    if tx.stage == Stage::Prepared && release::newer(&tx.version, VERSION) {
                         downloads.insert(tx.id.clone(), DownloadTask { snapshot: json!({"id":tx.id,"kind":"toolboxUpdate","toolId":null,"version":tx.version,"state":"succeeded","stage":"complete","doneBytes":null,"totalBytes":null,"canCancel":false,"error":null,"result":{"transactionId":tx.id,"readyToApply":true},"children":[]}), cancel: Arc::new(AtomicBool::new(false)) });
                     }
                 }
@@ -60,6 +62,7 @@ impl HostState {
         Arc::new(Self {
             service,
             downloads: Mutex::new(downloads),
+            release: Mutex::new(ReleaseStatus::default()),
             completed_requests: Mutex::new(BTreeMap::new()),
             native_dispatch: tokio::sync::Mutex::new(()),
             closing: AtomicBool::new(false),
@@ -83,6 +86,9 @@ impl HostState {
     }
     fn snapshot(&self) -> Value {
         let mut result = self.service.bootstrap();
+        result["toolbox"] = self.toolbox();
+        result["about"]["githubUrl"] = json!(release::PROJECT_URL);
+        result["about"]["feedbackUrl"] = json!(format!("{}/issues", release::PROJECT_URL));
         self.enrich_catalog(&mut result["catalog"]);
         self.schedule_icons(&result["catalog"], &result["settings"]);
         if let Some(operations) = result["operations"].as_array_mut() {
@@ -100,6 +106,17 @@ impl HostState {
             result["capabilities"]["selfUpdate"] = json!(false);
         }
         result
+    }
+    fn toolbox(&self) -> Value {
+        self.release.lock().unwrap().view(VERSION)
+    }
+    async fn check_update(&self) -> Result<Value, CoreError> {
+        let status = release::check().await?;
+        let view = status.view(VERSION);
+        let mut current = self.release.lock().unwrap();
+        *current = status;
+        self.service.emit("toolbox.changed", view.clone());
+        Ok(view)
     }
     fn enrich_catalog(&self, catalog: &mut Value) {
         let revision = catalog["revision"].as_u64().unwrap_or(0);
@@ -239,6 +256,12 @@ impl HostState {
         if method == "app.bootstrap" {
             return Response::success(request.id, self.snapshot());
         }
+        if method == "toolbox.checkUpdate" {
+            return match self.check_update().await {
+                Ok(view) => Response::success(request.id, view),
+                Err(error) => Response::failure(request.id, error),
+            };
+        }
         if method == "window.state" {
             // A state read must stay live and must not wait behind an update handoff.
             return match self.window_action(method, &request.params, window.as_ref()) {
@@ -357,7 +380,6 @@ impl HostState {
             | "window.startDragging"
             | "window.requestClose" => self.window_action(method, &request.params, window.as_ref()),
             _ => self
-                .service
                 .resolve_action(method, &request.params)
                 .and_then(|action| {
                     match action {
@@ -380,6 +402,21 @@ impl HostState {
                 .insert(request.id, (fingerprint, response.clone()));
         }
         response
+    }
+    fn resolve_action(&self, method: &str, params: &Value) -> Result<NativeAction, CoreError> {
+        if method == "system.openLink" {
+            let url = match params["target"].as_str() {
+                Some("release") => Some(self.release.lock().unwrap().page()),
+                Some("homepage") => Some(release::PROJECT_URL.into()),
+                Some("project") if params["toolId"].is_null() => Some(release::PROJECT_URL.into()),
+                Some("feedback") => Some(format!("{}/issues", release::PROJECT_URL)),
+                _ => None,
+            };
+            if let Some(url) = url {
+                return Ok(NativeAction::OpenUrl(url));
+            }
+        }
+        self.service.resolve_action(method, params)
     }
     fn window_action(
         &self,
@@ -433,27 +470,16 @@ impl HostState {
         )
     }
     fn start_download(self: &Arc<Self>, params: &Value) -> Result<Value, CoreError> {
-        let snapshot = self.service.bootstrap();
-        let metadata = snapshot["toolbox"].clone();
         let version = params["version"]
             .as_str()
             .ok_or_else(|| CoreError::invalid("需要指定工具箱版本。"))?;
-        if metadata["latestVersion"] != version
-            || metadata["hasUpdate"] != true
-            || metadata["canDownload"] != true
-        {
+        let Some(package) = self.release.lock().unwrap().package(version, VERSION) else {
             return Err(CoreError::new(
                 "NO_UPDATE",
-                "此版本没有可校验的更新包，请重新检查或查看发布页。",
+                "此版本没有可校验的 GitHub 更新包，请重新检查或查看发布页。",
             ));
-        }
-        let target = self.service.workspace().join(self_update::EXE_NAME);
-        if !target.is_file() {
-            return Err(CoreError::new(
-                "UNSUPPORTED_LAYOUT",
-                "本体更新需要工作目录根部的 PhysicalWorldToolbox.exe，请使用便携发布包。",
-            ));
-        }
+        };
+        self.verify_running_exe()?;
         let mut tasks = self.downloads.lock().unwrap();
         if let Some(task) = tasks.values().find(|task| {
             task.snapshot["version"] == version
@@ -466,7 +492,7 @@ impl HostState {
         }
         let id = format!("update-{}", uuid::Uuid::new_v4());
         let cancel = Arc::new(AtomicBool::new(false));
-        let operation = json!({"id":id,"kind":"toolboxUpdate","toolId":null,"version":version,"state":"queued","stage":"download","doneBytes":0,"totalBytes":metadata["sizeBytes"],"canCancel":true,"error":null,"result":null,"children":[]});
+        let operation = json!({"id":id,"kind":"toolboxUpdate","toolId":null,"version":version,"state":"queued","stage":"download","doneBytes":0,"totalBytes":package.size,"canCancel":true,"error":null,"result":null,"children":[]});
         tasks.insert(
             id.clone(),
             DownloadTask {
@@ -477,11 +503,11 @@ impl HostState {
         drop(tasks);
         self.service.emit("operation.changed", operation);
         let host = self.clone();
-        let settings = snapshot["settings"].clone();
+        let version = version.to_owned();
         let operation_id = id.clone();
         tauri::async_runtime::spawn(async move {
             let result = host
-                .download(&operation_id, metadata, settings, cancel.clone())
+                .download(&operation_id, version, package, cancel.clone())
                 .await;
             match result {
                 Ok(mut tx) => {
@@ -511,99 +537,99 @@ impl HostState {
     async fn download(
         &self,
         id: &str,
-        metadata: Value,
-        settings: Value,
+        version: String,
+        package: Package,
         cancel: Arc<AtomicBool>,
     ) -> Result<Transaction, String> {
         let directory = self.service.workspace().join("cache/self-update-downloads");
         self_update::ensure_managed(self.service.workspace(), &directory)?;
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let part = directory.join(format!("{id}.part"));
-        let archive = directory.join(format!("{id}.zip"));
         self.change_download(id, json!({"state":"running","stage":"download"}));
-        let package_url = metadata["packageUrl"].as_str().ok_or("更新包地址为空。")?;
-        let mut errors = vec![];
         let client = reqwest::Client::builder()
+            .https_only(true)
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(120))
             .user_agent(concat!("PhysicalWorldToolbox/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| e.to_string())?;
-        for url in download_candidates(package_url, &settings) {
+        let mut response = client
+            .get(&package.url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|e| e.to_string())?;
+        if response
+            .content_length()
+            .is_some_and(|size| size != package.size)
+        {
+            return Err("更新包大小与 GitHub 发布记录不一致。".into());
+        }
+        let mut file = tokio::fs::File::create_new(&part)
+            .await
+            .map_err(|e| e.to_string())?;
+        let result = async {
+            use tokio::io::AsyncWriteExt;
+            let mut done = 0;
+            let mut emitted = std::time::Instant::now();
+            while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("任务已取消。".into());
+                }
+                done += chunk.len() as u64;
+                if done > package.size {
+                    return Err("更新包大小与 GitHub 发布记录不一致。".into());
+                }
+                file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+                if emitted.elapsed() >= Duration::from_millis(100) {
+                    self.change_download(id, json!({"doneBytes":done}));
+                    emitted = std::time::Instant::now();
+                }
+            }
+            if done != package.size {
+                return Err("更新包大小与 GitHub 发布记录不一致。".into());
+            }
+            file.sync_all().await.map_err(|e| e.to_string())?;
+            drop(file);
             if cancel.load(Ordering::Relaxed) {
-                let _ = fs::remove_file(&part);
                 return Err("任务已取消。".into());
             }
-            let attempt = async {
-                let mut response = client
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .error_for_status()
-                    .map_err(|e| e.to_string())?;
-                let total = response.content_length().or(metadata["sizeBytes"].as_u64());
-                self.change_download(id, json!({"totalBytes":total,"doneBytes":0}));
-                let mut file = tokio::fs::File::create(&part)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let mut done = 0u64;
-                let mut emitted = std::time::Instant::now();
-                while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err("任务已取消。".to_string());
-                    }
-                    use tokio::io::AsyncWriteExt;
-                    file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-                    done += chunk.len() as u64;
-                    if emitted.elapsed() >= Duration::from_millis(100) {
-                        self.change_download(id, json!({"doneBytes":done}));
-                        emitted = std::time::Instant::now();
-                    }
-                }
-                file.sync_all().await.map_err(|e| e.to_string())?;
-                if metadata["sizeBytes"]
-                    .as_u64()
-                    .is_some_and(|expected| expected != done)
-                {
-                    return Err("更新包大小与清单不一致。".into());
-                }
-                self.change_download(id, json!({"doneBytes":done,"stage":"verify"}));
-                Ok::<(), String>(())
-            }
-            .await;
-            match attempt {
-                Ok(()) => {
-                    errors.clear();
-                    break;
-                }
-                Err(error) => errors.push(format!("{url}: {error}")),
-            }
+            self.change_download(id, json!({"doneBytes":done,"stage":"verify"}));
+            let workspace = self.service.workspace().to_path_buf();
+            let id = id.to_owned();
+            let archive = part.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                Transaction::prepare(&workspace, &id, &version, &archive, &package.sha256)
+            })
+            .await
+            .map_err(|e| e.to_string())?
         }
-        if !errors.is_empty() {
-            let _ = fs::remove_file(&part);
-            return Err(errors.join("\n"));
+        .await;
+        if self_update::ensure_managed(self.service.workspace(), &part).is_ok() {
+            let _ = fs::remove_file(part);
         }
-        if cancel.load(Ordering::Relaxed) {
-            let _ = fs::remove_file(&part);
-            return Err("任务已取消。".into());
+        result
+    }
+    fn verify_running_exe(&self) -> Result<(), CoreError> {
+        let workspace = self.service.workspace();
+        let target = workspace.join(self_update::EXE_NAME);
+        let error = || {
+            CoreError::new(
+                "UNSUPPORTED_LAYOUT",
+                "本体更新需要运行工作目录根部的 PhysicalWorldToolbox.exe。",
+            )
+        };
+        self_update::ensure_managed(workspace, &target).map_err(|_| error())?;
+        let expected = target.canonicalize().map_err(|_| error())?;
+        if std::env::current_exe()
+            .and_then(fs::canonicalize)
+            .map_err(CoreError::from)?
+            == expected
+        {
+            Ok(())
+        } else {
+            Err(error())
         }
-        fs::rename(&part, &archive).map_err(|e| e.to_string())?;
-        let workspace = self.service.workspace().to_path_buf();
-        let id = id.to_owned();
-        let sha = metadata["sha256"]
-            .as_str()
-            .ok_or("更新包缺少 SHA256。")?
-            .to_owned();
-        let version = metadata["latestVersion"].as_str().unwrap().to_owned();
-        let tx = tauri::async_runtime::spawn_blocking(move || {
-            let tx = Transaction::prepare(&workspace, &id, &version, &archive, &sha)?;
-            fs::rename(&archive, tx.directory().join("update.zip")).map_err(|e| e.to_string())?;
-            Ok::<_, String>(tx)
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        Ok(tx)
     }
     async fn apply_update(
         &self,
@@ -624,23 +650,14 @@ impl HostState {
             .ok_or_else(|| CoreError::invalid("需要更新任务 ID。"))?;
         let tx = Transaction::load(self.service.workspace(), id)
             .map_err(|e| CoreError::new("RECOVERY_REQUIRED", e))?;
-        if tx.stage != Stage::Prepared {
+        if tx.stage != Stage::Prepared || !release::newer(&tx.version, VERSION) {
             return Err(CoreError::new(
                 "RECOVERY_REQUIRED",
                 "更新任务尚未准备好，请重新下载或重启恢复。",
             ));
         }
-        let current = std::env::current_exe()
-            .and_then(fs::canonicalize)
-            .map_err(CoreError::from)?;
-        if current != tx.target().canonicalize().map_err(CoreError::from)? {
-            return Err(CoreError::new(
-                "UNSUPPORTED_LAYOUT",
-                "正在运行的 EXE 不是工作目录根部的工具箱本体。",
-            ));
-        }
-        let tx_for_helper = tx.clone();
-        self.accept_handoff(move || self_update::handoff(&tx_for_helper))
+        self.verify_running_exe()?;
+        self.accept_handoff(move || self_update::handoff(&tx))
             .await?;
         if let Some(window) = window {
             window.app_handle().exit(0);
@@ -871,6 +888,8 @@ pub fn run() -> Result<(), String> {
                             if event.event == "catalog.changed" {
                                 icon_host.enrich_catalog(&mut event.data);
                                 icon_host.schedule_icons(&event.data, &icon_host.service.bootstrap()["settings"]);
+                            } else if event.event == "toolbox.changed" {
+                                event.data = icon_host.toolbox();
                             }
                             let _ = handle.emit_to("main", "toolbox://event", event);
                         }
@@ -891,7 +910,7 @@ pub fn run() -> Result<(), String> {
                         match monitor_host.service.enable_writes_after_trial() {
                             Ok(()) => {
                                 trial_committed = true;
-                                let toolbox = monitor_host.service.bootstrap()["toolbox"].clone();
+                                let toolbox = monitor_host.toolbox();
                                 monitor_host.service.emit("toolbox.changed", toolbox);
                                 log(monitor_host.service.workspace(), "self-update-committed", json!({"transactionId":monitor_host.trial}));
                             }

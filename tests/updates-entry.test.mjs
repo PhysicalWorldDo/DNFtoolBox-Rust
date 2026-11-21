@@ -14,7 +14,7 @@ async function app(hash = '#home', operations = []) {
   const node = id => nodes.get(id) || nodes.set(id, {id, dataset: {}, classList: {add() {}, remove() {}}, setAttribute() {}, addEventListener() {}, focus() {}, close() {}, showModal() {}, querySelectorAll() {return [];}}).get(id);
   const location = {hash};
   const listeners = {};
-  const bridge = {available: true, listen: async () => () => {}, async dispatch(method, params = {}) {calls.push({method, params}); if (method === 'app.bootstrap') return structuredClone(snapshot); if (method === 'catalog.refresh') return {operationId: 'check-1'}; return {accepted: true};}};
+  const bridge = {available: true, listen: async () => () => {}, async dispatch(method, params = {}) {calls.push({method, params}); if (method === 'app.bootstrap') return structuredClone(snapshot); if (method === 'catalog.refresh') return {operationId: 'check-1'}; if (method === 'toolbox.checkUpdate') {snapshot.toolbox = {version: '0.4.0', checked: true, latestVersion: '0.4.2', hasUpdate: true, canDownload: true, changelog: ['发布说明']}; return snapshot.toolbox;} return {accepted: true};}};
   const context = vm.createContext({...model, createBridge: () => bridge, location, history: {pushState(_state, _title, hash) {location.hash = hash;}}, document: {getElementById: node, activeElement: null, addEventListener() {}}, window: {scrollTo() {}, addEventListener(event, callback) {listeners[event] = callback;}}, requestAnimationFrame(callback) {queueMicrotask(callback);}, setTimeout: () => 1, clearTimeout() {}, console});
   vm.runInContext(source, context);
   const settle = async () => {for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));};
@@ -62,4 +62,20 @@ test('a new host session gets its own first-entry check', async () => {
   await vm.runInContext('refreshSnapshot()', ui.context);
   await ui.settle();
   assert.equal(ui.calls.filter(call => call.method === 'catalog.refresh').length, 2);
+});
+
+test('checking the toolbox uses GitHub release metadata independently of the tool catalog', async () => {
+  const ui = await app('#settings');
+  await vm.runInContext(`handleAction({dataset: {act: 'self-check'}})`, ui.context);
+  await ui.settle();
+  assert.equal(ui.calls.filter(call => call.method === 'toolbox.checkUpdate').length, 1);
+  assert.equal(ui.calls.filter(call => call.method === 'catalog.refresh').length, 0);
+  assert.match(vm.runInContext('selfUpdateBody()', ui.context), /下载 v0\.4\.2/);
+});
+
+test('a staged update can be applied after an offline restart', async () => {
+  const ui = await app('#settings', [{id: 'prepared', kind: 'toolboxUpdate', version: '0.4.2', state: 'succeeded', result: {readyToApply: true}}]);
+  assert.match(vm.runInContext('selfUpdateBody()', ui.context), /应用更新并重启/);
+  await vm.runInContext(`handleAction({dataset: {act: 'confirm-apply-self', id: 'prepared'}})`, ui.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(call => call.method === 'toolbox.applyUpdate').params)), {operationId: 'prepared', confirmed: true});
 });

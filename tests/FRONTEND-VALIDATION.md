@@ -9,7 +9,7 @@ node tests/browser-fixture.mjs --port=4173
 
 在 Codex 内置浏览器打开 `http://127.0.0.1:4173`。本地服务只在响应 HTML 时插入测试桥，磁盘上的生产 HTML 不变。此桥记录请求，模拟回包和事件；不启动程序、不安装文件、不操作剪贴板、不打开外链，不证明原生后端行为。默认五个合同样本只存在于 `tests/browser-fixture.mjs`；未固定的阿拉德调色保留为旧选中偏好，用于确认它不会进入首页。
 
-可选场景：`--scenario=empty`、`--scenario=no-pins`、`--scenario=offline`、`--scenario=blocked`。`no-pins` 保留完整目录，首页显示前往工具库固定的空状态。使用真实 Rust `app.bootstrap` 捕获数据时：`node tests/browser-fixture.mjs --snapshot=E:\完整路径\bootstrap.json --port=4173`。输入可以是 bootstrap 对象或带 `result` 的成功回包，后续操作仍由 fixture 模拟。
+可选场景：`--scenario=empty`、`--scenario=no-pins`、`--scenario=offline`、`--scenario=blocked`、`--scenario=self-update`。`no-pins` 保留完整目录，首页显示前往工具库固定的空状态。`self-update` 在点击「检查本体更新」后模拟 GitHub 正式版。使用真实 Rust `app.bootstrap` 捕获数据时：`node tests/browser-fixture.mjs --snapshot=E:\完整路径\bootstrap.json --port=4173`。输入可以是 bootstrap 对象或带 `result` 的成功回包，后续操作仍由 fixture 模拟。
 
 测试端点：
 

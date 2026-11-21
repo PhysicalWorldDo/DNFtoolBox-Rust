@@ -62,6 +62,14 @@ async function dispatch(request) {
     case 'app.ready': break;
     case 'catalog.tool': result = snapshot.catalog.tools.find(tool => tool.id === params.toolId); break;
     case 'catalog.refresh': snapshot.catalog.checkedAt = new Date().toISOString(); emit('catalog.changed', snapshot.catalog); result = snapshot.catalog; break;
+    case 'toolbox.checkUpdate':
+      if (scenario === 'offline') return {v: 1, id: request.id, ok: false, error: {code: 'NETWORK', message: '测试场景：无法查询 GitHub Releases。', retryable: true}};
+      result = {...snapshot.toolbox, checked: true};
+      if (scenario === 'self-update') {
+        Object.assign(result, {latestVersion: '0.4.3', hasUpdate: true, canDownload: true, sizeBytes: 6400000, changelog: ['测试样本，来自 GitHub 正式版。'], releaseUrl: 'https://github.com/PhysicalWorldDo/DNFtoolBox-Rust/releases/tag/v0.4.3'});
+      }
+      emit('toolbox.changed', result);
+      break;
     case 'preferences.setPinned': {
       const ids = params.pinned ? [...snapshot.preferences.pinnedToolIds] : snapshot.preferences.pinnedToolIds.filter(id => id !== params.toolId);
       if (params.pinned && !ids.includes(params.toolId)) ids.push(params.toolId);

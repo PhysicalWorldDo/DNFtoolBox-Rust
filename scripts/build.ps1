@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$Test)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $buildRoot = Join-Path $projectRoot '.work\build'
@@ -21,6 +21,10 @@ try {
     if (-not (Get-Command rc.exe -ErrorAction SilentlyContinue)) { throw 'Windows SDK resource compiler RC.EXE is unavailable.' }
     Push-Location -LiteralPath $projectRoot
     try {
+        if ($Test) {
+            & cargo +stable-x86_64-pc-windows-msvc test --workspace --locked --target x86_64-pc-windows-msvc --features custom-protocol
+            if ($LASTEXITCODE -ne 0) { throw "Cargo tests failed ($LASTEXITCODE)." }
+        }
         & cargo +stable-x86_64-pc-windows-msvc build --release --locked --target x86_64-pc-windows-msvc -p physical-world-toolbox --features custom-protocol 2>&1 | Tee-Object -FilePath (Join-Path $buildRoot 'release.log')
         if ($LASTEXITCODE -ne 0) { throw "Cargo release build failed ($LASTEXITCODE)." }
         $executable = Join-Path $projectRoot 'target\x86_64-pc-windows-msvc\release\PhysicalWorldToolbox.exe'

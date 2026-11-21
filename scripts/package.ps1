@@ -1,9 +1,9 @@
 [CmdletBinding()]
-param()
+param([switch]$Test)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-& (Join-Path $PSScriptRoot 'build.ps1')
+& (Join-Path $PSScriptRoot 'build.ps1') -Test:$Test
 
 $application = Get-Content -LiteralPath (Join-Path $projectRoot 'src-tauri/tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json
 $fileName = 'PhysicalWorldToolbox.exe'

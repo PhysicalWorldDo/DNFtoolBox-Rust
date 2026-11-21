@@ -163,6 +163,23 @@ pub fn replace_file(candidate: &Path, target: &Path) -> Result<(), String> {
     }
 }
 
+pub fn rename_new(source: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        let result = unsafe { MoveFileExW(wide(source).as_ptr(), wide(destination).as_ptr(), 0) };
+        if result == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::hard_link(source, destination).map_err(|e| e.to_string())?;
+        std::fs::remove_file(source).map_err(|e| e.to_string())
+    }
+}
+
 /// A process handle opened before the parent can exit avoids PID reuse during handoff.
 #[cfg(windows)]
 pub struct ParentProcess(windows_sys::Win32::Foundation::HANDLE);

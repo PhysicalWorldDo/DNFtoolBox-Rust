@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -18,6 +18,15 @@ pub enum Stage {
     Committed,
     RolledBack,
     RecoveryRequired,
+}
+
+impl Stage {
+    fn needs_recovery(self) -> bool {
+        matches!(
+            self,
+            Self::WaitingForExit | Self::Installing | Self::AwaitingReady | Self::RecoveryRequired
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,18 +74,20 @@ impl Transaction {
     ) -> Result<Self, String> {
         crate::cli::update_id(id.to_string())?;
         let workspace = workspace.canonicalize().map_err(|e| e.to_string())?;
-        ensure_managed(&workspace, &workspace.join("cache/self-update"))?;
-        let directory = workspace.join("cache/self-update").join(id);
-        if directory.exists() {
-            return Err("更新事务已经存在，请重新检查任务状态。".into());
-        }
-        fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        let target = workspace.join(EXE_NAME);
+        ensure_managed(&workspace, &target)?;
+        let old_sha256 = file_hash(&target)?;
+        let root = workspace.join("cache/self-update");
+        ensure_managed(&workspace, &root)?;
+        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let directory = root.join(id);
+        fs::create_dir(&directory).map_err(|e| e.to_string())?;
         let candidate = extract_package(archive, &directory, sha)?;
         let transaction = Self {
             id: id.into(),
             version: version.into(),
             nonce: uuid::Uuid::new_v4().to_string(),
-            old_sha256: file_hash(&workspace.join(EXE_NAME))?,
+            old_sha256,
             new_sha256: file_hash(&candidate)?,
             stage: Stage::Prepared,
             message: None,
@@ -96,16 +107,15 @@ impl Transaction {
         let workspace = workspace.canonicalize().map_err(|e| e.to_string())?;
         let directory = workspace.join("cache/self-update").join(id);
         ensure_managed(&workspace, &directory)?;
+        ensure_managed(&workspace, &workspace.join(EXE_NAME))?;
         for file in [
             "receipt.json",
-            "receipt.json.tmp",
             "candidate.exe",
             "backup.exe",
             "helper.exe",
             "ready.json",
             "helper.accepted.json",
             "restore.exe",
-            "update.zip",
         ] {
             ensure_managed(&workspace, &directory.join(file))?;
         }
@@ -123,28 +133,21 @@ impl Transaction {
         atomic_json(&self.directory().join("receipt.json"), self)
     }
     pub fn install(&mut self) -> Result<(), String> {
-        if file_hash(&self.target())? != self.old_sha256
-            || file_hash(&self.directory().join("candidate.exe"))? != self.new_sha256
-        {
+        let target = self.target();
+        let candidate = self.directory().join("candidate.exe");
+        ensure_managed(&self.workspace, &target)?;
+        ensure_managed(&self.workspace, &candidate)?;
+        if file_hash(&target)? != self.old_sha256 || file_hash(&candidate)? != self.new_sha256 {
             return Err("更新候选或旧主程序已发生变化，请重新下载。".into());
         }
         let backup = self.directory().join("backup.exe");
-        fs::copy(self.target(), &backup).map_err(|e| e.to_string())?;
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&backup)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        copy_new(&target, &backup)?;
         if file_hash(&backup)? != self.old_sha256 {
             return Err("旧主程序备份校验失败。".into());
         }
         self.stage = Stage::Installing;
         self.save()?;
-        replace_with_retry(
-            &self.directory().join("candidate.exe"),
-            &self.target(),
-            &self.new_sha256,
-        )?;
+        replace_with_retry(&candidate, &target, &self.old_sha256, &self.new_sha256)?;
         self.stage = Stage::AwaitingReady;
         self.save()
     }
@@ -152,9 +155,16 @@ impl Transaction {
         if self.stage == Stage::Committed {
             return Ok(());
         }
-        let target_hash = file_hash(&self.target()).ok();
+        let target = self.target();
+        ensure_managed(&self.workspace, &target)?;
+        let target_hash = match fs::symlink_metadata(&target) {
+            Ok(_) => Some(file_hash(&target)?),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(error.to_string()),
+        };
         if target_hash.as_deref() != Some(&self.old_sha256) {
             let backup = self.directory().join("backup.exe");
+            ensure_managed(&self.workspace, &backup)?;
             if file_hash(&backup).ok().as_deref() != Some(&self.old_sha256)
                 || target_hash.as_deref().is_some_and(|h| h != self.new_sha256)
             {
@@ -167,9 +177,20 @@ impl Transaction {
                 return Err(self.message.clone().unwrap());
             }
             let restore = self.directory().join("restore.exe");
-            fs::copy(&backup, &restore).map_err(|e| e.to_string())?;
-            if self.target().exists() {
-                if let Err(error) = replace_with_retry(&restore, &self.target(), &self.old_sha256) {
+            ensure_managed(&self.workspace, &restore)?;
+            if !restore.exists() {
+                copy_new(&backup, &restore)?;
+            }
+            if file_hash(&restore)? != self.old_sha256 {
+                return Err(format!(
+                    "恢复文件身份不匹配，旧版备份保留在 {}。",
+                    backup.display()
+                ));
+            }
+            if target_hash.is_some() {
+                if let Err(error) =
+                    replace_with_retry(&restore, &target, &self.new_sha256, &self.old_sha256)
+                {
                     self.stage = Stage::RecoveryRequired;
                     self.message = Some(format!(
                         "恢复主程序时文件仍被占用；备份保留在 {}。{error}",
@@ -179,28 +200,65 @@ impl Transaction {
                     return Err(self.message.clone().unwrap());
                 }
             } else {
-                fs::rename(&restore, self.target()).map_err(|e| e.to_string())?;
+                crate::native::rename_new(&restore, &target)?;
             }
         }
         self.stage = Stage::RolledBack;
         self.message = Some(reason.into());
         self.save()
     }
-}
 
-fn replace_with_retry(candidate: &Path, target: &Path, expected_hash: &str) -> Result<(), String> {
-    let mut last_error = String::new();
-    for _ in 0..30 {
-        match crate::native::replace_file(candidate, target) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if file_hash(target).ok().as_deref() == Some(expected_hash) {
-                    return Ok(());
-                }
-                last_error = error;
-                std::thread::sleep(std::time::Duration::from_millis(100));
+    fn cleanup_completed(&self) {
+        // Unknown files, including files using reserved names, may belong to the user.
+        for (name, expected, alternate) in [
+            ("helper.exe", &self.old_sha256, Some(&self.new_sha256)),
+            ("backup.exe", &self.old_sha256, None),
+            ("candidate.exe", &self.new_sha256, None),
+            ("restore.exe", &self.old_sha256, None),
+        ] {
+            let path = self.directory().join(name);
+            if ensure_managed(&self.workspace, &path).is_ok()
+                && file_hash(&path).is_ok_and(|hash| &hash == expected || Some(&hash) == alternate)
+            {
+                let _ = fs::remove_file(path);
             }
         }
+    }
+}
+
+fn copy_new(source: &Path, destination: &Path) -> Result<(), String> {
+    let mut input = File::open(source).map_err(|e| e.to_string())?;
+    let temporary = destination.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut output = File::create_new(&temporary).map_err(|e| e.to_string())?;
+    let copied = std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all());
+    drop(output);
+    let result = copied
+        .map_err(|e| e.to_string())
+        .and_then(|_| crate::native::rename_new(&temporary, destination));
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn replace_with_retry(
+    candidate: &Path,
+    target: &Path,
+    before: &str,
+    after: &str,
+) -> Result<(), String> {
+    let mut last_error = String::new();
+    for _ in 0..30 {
+        match file_hash(target) {
+            Ok(hash) if hash == after => return Ok(()),
+            Ok(hash) if hash == before => match crate::native::replace_file(candidate, target) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = error,
+            },
+            Ok(_) => return Err("主程序已被其他操作更换，旧版备份已保留。".into()),
+            Err(error) => last_error = error,
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Err(format!(
         "FILE_IN_USE: 主程序替换失败，备份已保留。{last_error}"
@@ -208,39 +266,47 @@ fn replace_with_retry(candidate: &Path, target: &Path, expected_hash: &str) -> R
 }
 
 pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let temporary = path.with_extension("json.tmp");
-    let mut file = File::create(&temporary).map_err(|e| e.to_string())?;
-    file.write_all(&serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = File::create_new(&temporary).map_err(|e| e.to_string())?;
+    let write = file.write_all(&bytes).and_then(|_| file.sync_all());
     drop(file);
-    fs::rename(temporary, path).map_err(|e| e.to_string())
+    let result = write.and_then(|_| fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(|e| e.to_string())
 }
 
 pub fn ensure_managed(workspace: &Path, path: &Path) -> Result<(), String> {
     if !path.starts_with(workspace) {
         return Err("路径不在工具箱工作区内。".into());
     }
+    let mut current = workspace.to_path_buf();
     for component in path
         .strip_prefix(workspace)
         .map_err(|e| e.to_string())?
         .components()
-        .scan(workspace.to_path_buf(), |current, component| {
-            current.push(component);
-            Some(current.clone())
-        })
     {
-        if let Ok(metadata) = fs::symlink_metadata(&component) {
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                if metadata.file_attributes() & 0x400 != 0 {
-                    return Err("受管更新目录不能是链接或重解析点。".into());
+        let std::path::Component::Normal(name) = component else {
+            return Err("受管更新路径包含无效的目录层级。".into());
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if metadata.file_attributes() & 0x400 != 0 {
+                        return Err("受管更新目录不能是链接或重解析点。".into());
+                    }
+                }
+                if metadata.file_type().is_symlink() {
+                    return Err("受管更新目录不能是链接。".into());
                 }
             }
-            if metadata.file_type().is_symlink() {
-                return Err("受管更新目录不能是链接。".into());
-            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
         }
     }
     Ok(())
@@ -275,14 +341,16 @@ pub fn acknowledge_ready(
 }
 
 pub fn upgrade_lock(workspace: &Path) -> Result<Option<File>, String> {
-    ensure_managed(workspace, &workspace.join("cache/self-update"))?;
-    fs::create_dir_all(workspace.join("cache/self-update")).map_err(|e| e.to_string())?;
+    let directory = workspace.join("cache/self-update");
+    let lock = directory.join("upgrade.lock");
+    ensure_managed(workspace, &lock)?;
+    fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(workspace.join("cache/self-update/upgrade.lock"))
+        .open(lock)
         .map_err(|e| e.to_string())?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),
@@ -307,26 +375,12 @@ pub fn pending_recovery(workspace: &Path) -> Result<Option<Transaction>, String>
             Ok(tx) => tx,
             Err(_) => continue,
         };
-        if matches!(
-            tx.stage,
-            Stage::WaitingForExit
-                | Stage::Installing
-                | Stage::AwaitingReady
-                | Stage::RecoveryRequired
-        ) {
+        if tx.stage.needs_recovery() {
             return Ok(Some(tx));
         }
         // A helper cannot remove its own mapped image on Windows. The next normal launch does so.
         if matches!(tx.stage, Stage::Committed | Stage::RolledBack) {
-            for name in [
-                "helper.exe",
-                "backup.exe",
-                "candidate.exe",
-                "restore.exe",
-                "update.zip",
-            ] {
-                let _ = fs::remove_file(tx.directory().join(name));
-            }
+            tx.cleanup_completed();
         }
     }
     Ok(None)
@@ -339,10 +393,18 @@ pub fn handoff(transaction: &Transaction) -> Result<(), String> {
         time::{Duration, Instant},
     };
     let helper = transaction.directory().join("helper.exe");
-    fs::copy(std::env::current_exe().map_err(|e| e.to_string())?, &helper)
-        .map_err(|e| e.to_string())?;
+    ensure_managed(&transaction.workspace, &helper)?;
+    if !helper.exists() {
+        copy_new(
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+            &helper,
+        )?;
+    }
+    let hash = file_hash(&helper)?;
+    if hash != transaction.old_sha256 && hash != transaction.new_sha256 {
+        return Err("更新 helper 文件身份错误。".into());
+    }
     let accepted = transaction.directory().join("helper.accepted.json");
-    let _ = fs::remove_file(&accepted);
     let mut child = crate::native::hidden(
         Command::new(helper)
             .arg("--workspace")
@@ -379,11 +441,11 @@ pub fn handoff(transaction: &Transaction) -> Result<(), String> {
 
 #[cfg(windows)]
 pub fn run_helper(workspace: &Path, id: &str, parent_pid: u32) -> Result<(), String> {
-    use std::{
-        process::Command,
-        time::{Duration, Instant},
-    };
+    use std::process::Command;
     let mut tx = Transaction::load(workspace, id)?;
+    if tx.stage != Stage::Prepared && !tx.stage.needs_recovery() {
+        return Err("本体更新事务已结束。".into());
+    }
     let current = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .canonicalize()
@@ -403,7 +465,7 @@ pub fn run_helper(workspace: &Path, id: &str, parent_pid: u32) -> Result<(), Str
     }
     let upgrade = upgrade_lock(workspace)?.ok_or("另一个本体更新进程正在运行。")?;
     let parent = crate::native::ParentProcess::open(parent_pid)?;
-    let recovery = tx.stage != Stage::Prepared;
+    let recovery = tx.stage.needs_recovery();
     tx.stage = Stage::WaitingForExit;
     tx.save()?;
     atomic_json(
@@ -455,42 +517,51 @@ pub fn run_helper(workspace: &Path, id: &str, parent_pid: u32) -> Result<(), Str
             return Err(error.to_string());
         }
     };
-    let start = Instant::now();
-    let mut healthy = false;
-    while start.elapsed() < Duration::from_secs(45) {
-        if let Ok(bytes) = fs::read(tx.directory().join("ready.json")) {
-            if let Ok(ack) = serde_json::from_slice::<HealthAck>(&bytes) {
-                if validate_health(&tx, &ack, trial.id())
-                    && file_hash(&tx.target())? == tx.new_sha256
-                {
-                    healthy = true;
-                    break;
-                }
-            }
-        }
-        if trial.try_wait().map_err(|e| e.to_string())?.is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    if healthy {
-        tx.stage = Stage::Committed;
-        tx.message = Some("新版初始化及 WebView 首屏已确认。".into());
-        tx.save()?;
-        let _ = fs::remove_file(tx.directory().join("backup.exe"));
-        let _ = fs::remove_file(tx.directory().join("update.zip"));
-        Ok(())
-    } else {
+    if let Err(error) = commit_trial(&mut tx, &mut trial) {
         let _ = trial.kill();
         trial.wait().map_err(|e| e.to_string())?;
-        tx.rollback("新版未在 45 秒内确认首屏就绪，已恢复旧版本。")?;
+        tx.rollback(&error)?;
         drop(upgrade);
         crate::native::hidden(Command::new(tx.target()).arg("--workspace").arg(workspace))
             .current_dir(workspace)
             .spawn()
             .map_err(|e| e.to_string())?;
-        Err("新版首屏未就绪，已恢复旧版本。".into())
+        return Err(format!("{error} 已恢复旧版本。"));
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn commit_trial(tx: &mut Transaction, child: &mut std::process::Child) -> Result<(), String> {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    let ready = tx.directory().join("ready.json");
+    while started.elapsed() < Duration::from_secs(45) {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("新版在确认就绪前已退出。".into());
+        }
+        if let Ok(bytes) = fs::read(&ready) {
+            if let Ok(ack) = serde_json::from_slice::<HealthAck>(&bytes) {
+                if validate_health(tx, &ack, child.id()) {
+                    if file_hash(&tx.target())? != tx.new_sha256 {
+                        return Err("新版程序已发生变化。".into());
+                    }
+                    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                        return Err("新版在确认就绪前已退出。".into());
+                    }
+                    tx.stage = Stage::Committed;
+                    tx.message = Some("新版初始化及 WebView 首屏已确认。".into());
+                    if let Err(error) = tx.save() {
+                        tx.stage = Stage::AwaitingReady;
+                        return Err(format!("无法保存更新结果。{error}"));
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err("新版未在 45 秒内确认首屏就绪。".into())
 }
 
 #[cfg(not(windows))]
@@ -539,7 +610,7 @@ pub fn extract_package(
     }
     fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let candidate = directory.join("candidate.exe");
-    let mut output = File::create(&candidate).map_err(|e| e.to_string())?;
+    let mut output = File::create_new(&candidate).map_err(|e| e.to_string())?;
     std::io::copy(&mut entry, &mut output).map_err(|e| e.to_string())?;
     output.sync_all().map_err(|e| e.to_string())?;
     let mut magic = [0; 2];
@@ -592,7 +663,7 @@ mod tests {
         let dir = area("bad-hash");
         let (path, _) = archive(&dir, &[("PhysicalWorldToolbox.exe", b"MZ-test")]);
         assert!(extract_package(&path, &dir.join("stage"), &"0".repeat(64)).is_err());
-        assert!(!dir.join("stage/PhysicalWorldToolbox.exe").exists());
+        assert!(!dir.join("stage/candidate.exe").exists());
     }
 
     #[test]
@@ -608,7 +679,7 @@ mod tests {
             let dir = area("invalid-layout");
             let (path, hash) = archive(&dir, &entries);
             assert!(extract_package(&path, &dir.join("stage"), &hash).is_err());
-            assert!(!dir.join("stage/PhysicalWorldToolbox.exe").exists());
+            assert!(!dir.join("stage/candidate.exe").exists());
         }
     }
 
@@ -640,6 +711,68 @@ mod tests {
             fs::read(dir.join("cache/self-update/update-test/backup.exe")).unwrap(),
             b"MZ-original"
         );
+    }
+
+    #[test]
+    fn leaves_user_files_byte_for_byte_during_installation_and_rollback() {
+        let dir = area("keep-user-data");
+        fs::write(dir.join(EXE_NAME), b"MZ-original").unwrap();
+        let files = [
+            ("我的资料.txt", b"unrelated root file".as_slice()),
+            ("config/installed.json", b"install history".as_slice()),
+            (
+                "tools/example/data/config.txt",
+                b"tool user data".as_slice(),
+            ),
+            ("cache/self-update/keep.txt", b"user cache file".as_slice()),
+        ];
+        for (name, bytes) in files {
+            let path = dir.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let (path, hash) = archive(&dir, &[(EXE_NAME, b"MZ-next")]);
+        let mut tx = Transaction::prepare(&dir, "update-test", "0.5.0", &path, &hash).unwrap();
+        tx.install().unwrap();
+        tx.rollback("trial exited").unwrap();
+        assert!(pending_recovery(&tx.workspace).unwrap().is_none());
+        for (name, bytes) in files {
+            assert_eq!(fs::read(dir.join(name)).unwrap(), bytes, "{name}");
+        }
+    }
+
+    #[test]
+    fn does_not_overwrite_an_existing_file_at_the_backup_path() {
+        let dir = area("backup-collision");
+        fs::write(dir.join(EXE_NAME), b"MZ-original").unwrap();
+        let (path, hash) = archive(&dir, &[(EXE_NAME, b"MZ-next")]);
+        let mut tx = Transaction::prepare(&dir, "update-test", "0.5.0", &path, &hash).unwrap();
+        let backup = tx.directory().join("backup.exe");
+        fs::write(&backup, b"keep this file").unwrap();
+        assert!(tx.install().is_err());
+        assert_eq!(fs::read(dir.join(EXE_NAME)).unwrap(), b"MZ-original");
+        assert_eq!(fs::read(backup).unwrap(), b"keep this file");
+    }
+
+    #[test]
+    fn cleanup_leaves_files_whose_content_does_not_belong_to_the_transaction() {
+        let dir = area("cleanup-ownership");
+        fs::write(dir.join(EXE_NAME), b"MZ-original").unwrap();
+        let (archive_path, hash) = archive(&dir, &[(EXE_NAME, b"MZ-next")]);
+        let mut tx =
+            Transaction::prepare(&dir, "update-test", "0.5.0", &archive_path, &hash).unwrap();
+        tx.install().unwrap();
+        tx.stage = Stage::Committed;
+        tx.save().unwrap();
+        let user_file = tx.directory().join("helper.exe");
+        fs::write(&user_file, b"user file with reserved name").unwrap();
+        assert!(pending_recovery(&tx.workspace).unwrap().is_none());
+        assert_eq!(
+            fs::read(user_file).unwrap(),
+            b"user file with reserved name"
+        );
+        assert!(!tx.directory().join("backup.exe").exists());
+        assert_eq!(fs::read(dir.join(EXE_NAME)).unwrap(), b"MZ-next");
     }
 
     #[test]

@@ -1,0 +1,95 @@
+name: Windows build and release
+run-name: Windows build · ${{ inputs.release_tag || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing tag to publish (vX.Y.Z). Leave empty to build without publishing.'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - name: Validate release tag
+        if: inputs.release_tag != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:RELEASE_TAG -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Enter a release tag in vX.Y.Z format.'
+          }
+
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
+          persist-credentials: false
+
+      - name: Check version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
+          $app = $metadata.packages | Where-Object name -eq 'physical-world-toolbox'
+          $tauri = Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          if (!$app -or $app.version -cne $tauri.version) {
+            throw 'Cargo and Tauri application versions must match.'
+          }
+          if ($env:RELEASE_TAG -and $env:RELEASE_TAG -cne "v$($app.version)") {
+            throw "Tag $env:RELEASE_TAG does not match application version $($app.version)."
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Test frontend
+        shell: pwsh
+        run: node --test tests/*.test.mjs
+
+      - name: Test Rust and package Windows x64
+        shell: pwsh
+        run: ./scripts/package.ps1 -Test
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-x64-portable
+          path: dist/PhysicalWorldToolbox-*-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    if: inputs.release_tag != ''
+    needs: build
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - name: Download CI-built ZIP
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: windows-x64-portable
+          path: release-assets
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $zip = Get-Item -LiteralPath "release-assets/PhysicalWorldToolbox-$version-win-x64.zip"
+          gh release create $env:RELEASE_TAG $zip.FullName --repo $env:GITHUB_REPOSITORY --verify-tag --title $env:RELEASE_TAG --generate-notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
